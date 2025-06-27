@@ -1,0 +1,75 @@
+import os, sys
+import configparser
+
+from providers.komga import KomgaAPI
+from providers.aria2 import Aria2RPC
+from providers.ehentai import EHentaiTools
+from utils import get_task_logger
+
+logger = get_task_logger()
+config_path = './config.ini'
+config_parser = configparser.ConfigParser()
+
+if not os.path.isfile(config_path):
+    logger.error("配置文件不存在，请将 config.ini.example 重命名为 config.ini 并修改配置")
+    sys.exit()
+else:
+    config_parser.read(config_path, encoding='utf-8')
+    port = int(config_parser['general']['port'])
+    eh = EHentaiTools(cookie=config_parser['ehentai']['cookie'])
+    response = eh.get_session()
+    hath_toggle = False
+    if 'enable' in config_parser['aria2'] and config_parser['aria2']['enable'].lower() in ['true', '1', 'yes']: 
+        logger.info("开始测试 Aria2 RPC 的连接")
+        aria2_server = config_parser['aria2']['server']
+        aria2_token = config_parser['aria2']['token']
+        download_dir = config_parser['aria2']['download_dir']
+        if 'mapped_dir' in config_parser['aria2'] and not config_parser['aria2']['mapped_dir'] == '':
+            real_download_dir = config_parser['aria2']['mapped_dir']
+        else:
+            real_download_dir = download_dir
+        aria2 = Aria2RPC(url=aria2_server, token=aria2_token)
+        result = aria2.get_global_stat()
+        if 'result' in result:
+            logger.info(result)
+            logger.info("Aria2 RPC 连接正常")
+            aria2_toggle = True
+        else:
+            logger.info(result)
+            logger.error("Aria2 RPC 连接异常, 种子下载功能将不可用")
+            aria2_toggle = False
+    else:  
+        logger.info("Aria2 RPC 功能未启用")
+        aria2_toggle = False
+    if 'enable' in config_parser['komga'] and config_parser['komga']['enable'].lower() in ['true', '1', 'yes']:
+        logger.info("开始测试 Komga API 的连接")
+        komga_server = config_parser['komga']['server'].rstrip('/')
+        komga_token = config_parser['komga']['token']
+        komga = KomgaAPI(server=komga_server, token=komga_token)
+        if komga.status_code == 204:
+            logger.info("Komga API 连接成功")
+            libraries = komga.get_libraries().json()
+            if libraries:
+                logger.info("获取到以下库信息:")
+                komga_toggle = True
+                for library in libraries:
+                    logger.info(f"{library['name']} {library['id']} {library['root']}")
+        else:
+            logger.error("Komga API 连接异常, 请手动刷新 Komga 库")
+            komga_toggle = False
+    else:
+        logger.info("Komga API 功能未启用")
+        komga_toggle = False
+    if aria2_toggle == True and hath_toggle == False:
+        mode = "torrent"
+    elif aria2_toggle == False and hath_toggle == True:
+        mode = "archive"
+    elif aria2_toggle == True and hath_toggle == True:
+        mode = "both"
+
+def get_config():
+    return config_parser
+
+def save_config(new_config):
+    with open(config_path, 'w', encoding='utf-8') as f:
+        new_config.write(f)
