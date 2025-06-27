@@ -1,4 +1,4 @@
-import zipfile, os, shutil
+import zipfile, os
 import io
 from xml.dom.minidom import parseString
 import dicttoxml

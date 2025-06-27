@@ -3,7 +3,6 @@ import requests
 from bs4 import BeautifulSoup
 
 from utils import check_dirs
-from providers import aria2
 
 headers = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/85.0.4183.102 Safari/537.36',
@@ -218,7 +217,7 @@ class EHentaiTools:
                             if self.logger: self.logger.info(f"共找到{len(torrent_list)}个有效种子, 本次选择, {max_seeds_torrent}")
                             # 将种子下载至本地
                             torrent = self.session.get(max_seeds_torrent['link'])
-                            torrent_path = os.path.join(check_dirs('torrents'), max_seeds_torrent['name'])
+                            torrent_path = os.path.join(check_dirs('./data/ehentai/torrents'), max_seeds_torrent['name'])
                             with open(torrent_path, 'wb') as f:
                                 if self.logger: self.logger.info(f"开始下载: {torrent_link} ==> {torrent_path}")
                                 f.write(torrent.content)

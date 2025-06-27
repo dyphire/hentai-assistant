@@ -1,7 +1,7 @@
 import os, sys, uuid, configparser, re, shutil
 
 from flask import Flask, request, jsonify, render_template_string, redirect, url_for
-import concurrent.futures, threading
+import concurrent.futures
 import langcodes
 
 # import local modules

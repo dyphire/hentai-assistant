@@ -1,6 +1,4 @@
 import requests
-from requests.auth import HTTPBasicAuth
-
 from urllib.parse import urlparse
 
 from utils import is_url
