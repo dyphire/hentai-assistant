@@ -486,7 +486,7 @@ def download_page():
 
 if __name__ == '__main__':
     if not os.path.isfile(config_path):
-        example_path = './config.ini.example'
+        example_path = './data/config.ini'
         if os.path.isfile(example_path):
             shutil.copy(example_path, config_path)
             global_logger.info("未正确配置 config.ini。")

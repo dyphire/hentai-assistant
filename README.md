@@ -16,7 +16,7 @@
    ```
 ### 方式二：Docker
  ```
- docker run -d -p 5001:5001 -v /home/yourname/hentai-assistant:/data rosystain/hentai-assistant:latest
+ docker run -d -p 5001:5001 -v /home/yourname/hentai-assistant:/data ghcr.io/rosystain/hentai-assistant:latest
  ```
 
 ## 使用说明
