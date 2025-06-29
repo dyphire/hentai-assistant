@@ -20,7 +20,7 @@ app = Flask(__name__)
 # 设置5001端口为默认端口
 app.config['port'] = 5001
 
-config_path = './config.ini'
+config_path = './data/config.ini'
 config_parser = configparser.ConfigParser()
 
 # 创建一个线程池用于并发处理任务
@@ -75,6 +75,10 @@ def get_task_logger(task_id):
 
 def check_config():
     config_parser.read(config_path, encoding='utf-8')
+    if 'keep_torrents' in config_parser and config_parser['general']['keep_torrents'].lower() in ['true', '1', 'yes']:
+        app.config['keep_torrents'] = True
+    else:
+        app.config['keep_torrents'] = False
     # 测试 E-Hentai 的连接
     if 'cookie' in config_parser['ehentai'] and not config_parser['ehentai']['cookie'] == '':
         app.config['eh_cookie'] = {"cookie": config_parser['ehentai']['cookie']}
@@ -149,6 +153,8 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None):
         if logger: logger.info(result)
     elif torrent != None:
         result = rpc.add_torrent(torrent, dir=dir, out=out)
+        if not app.config['keep_torrents'] == True:
+            os.remove(torrent)
         if logger: logger.info(result)
     gid = result['result']
     # 监视 aria2 的下载进度
