@@ -38,7 +38,7 @@ class TaskInfo:
         self.error = None
 
 # 日志初始化
-LOG_FILE = "app.log"
+LOG_FILE = "./data/app.log"
 
 def init_global_logger():
     logger = logging.getLogger("app")

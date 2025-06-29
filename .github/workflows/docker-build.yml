@@ -36,4 +36,4 @@ jobs:
         with:
           context: . # Dockerfile 所在的目录
           push: true
-          tags: ghcr.io/${{ github.actor }}:latest
+          tags: ghcr.io/${{ github.actor }}/hentai-assistant:latest

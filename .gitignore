@@ -10,9 +10,10 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # 忽略 data 和 test 文件夹
-data/
+data/*
+!data/config.ini
 test/
-logs/
+
 
 # 忽略配置文件
 config.ini
