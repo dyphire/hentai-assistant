@@ -36,4 +36,6 @@ jobs:
         with:
           context: . # Dockerfile 所在的目录
           push: true
+          file: ./dockerfile
           tags: ghcr.io/${{ github.actor }}/hentai-assistant:latest
+          platforms: linux/amd64,linux/arm64
