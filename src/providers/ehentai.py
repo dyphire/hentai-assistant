@@ -32,8 +32,10 @@ def parse_filename(text):
                 penciller = penciller.split(s)[1]
                 print('Penciller:', penciller)
         return title, writer, penciller
+    else:
+        return title, None, None
 
-def get_original_tag(self, text):
+def get_original_tag(text):
     dictpath = check_dirs('data/ehentai/translations/')
     if os.path.isfile(dictpath + 'tags.json'):
         with open(dictpath + 'tags.json', 'r', encoding='utf-8') as rf:
@@ -53,6 +55,7 @@ def get_original_tag(self, text):
             with open(check_dirs(dictpath) + 'tags.json', 'w', encoding='utf-8') as wf:
                 json.dump(tagsdict, wf, ensure_ascii=False, indent=4)
             return tagsdict[text]
+
 def male_only_taglist():
     json_path = os.path.join(check_dirs("data/ehentai/tags"), "male_only_taglist.json")
     if os.path.exists(json_path):
