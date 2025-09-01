@@ -1,5 +1,6 @@
 import zipfile, os
 import io
+import shutil
 from xml.dom.minidom import parseString
 import dicttoxml
 from utils import check_dirs
@@ -8,7 +9,7 @@ def make_comicinfo_xml(metadata):
     return parseString(dicttoxml.dicttoxml(metadata, custom_root='ComicInfo', attr_type=False)).toprettyxml(indent="  ", encoding="UTF-8")
 
 # 将XML直接写入ZIP文件中
-def write_xml_to_zip(zip_file_path, metadata, copy=False, logger=None):
+def write_xml_to_zip(zip_file_path, mapped_file_path, metadata, copy=False, logger=None):
     # 创建XML内容
     xml_content = make_comicinfo_xml(metadata)      
     
@@ -67,6 +68,12 @@ def write_xml_to_zip(zip_file_path, metadata, copy=False, logger=None):
         # 为新档命名
         new_file_path = target_zip.replace('.tmp', '.cbz')
         os.rename(target_zip, new_file_path)
+
+        mapped_file_path = os.path.splitext(mapped_file_path)[0] + '.cbz'
+        if mapped_file_path != new_file_path:
+            os.makedirs(os.path.dirname(mapped_file_path), exist_ok=True)
+            shutil.move(new_file_path, mapped_file_path)
+            if logger: logger.info(f"文件移动到映射目录: {mapped_file_path}")
+            return mapped_file_path
+
         return new_file_path
-
-

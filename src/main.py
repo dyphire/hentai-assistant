@@ -164,9 +164,24 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None):
         return None
     else:
         filename = os.path.basename(file)
-        local_file_path = os.path.join(app.config['real_download_dir'], filename)
+        if filename.lower().endswith("zip"):
+            local_file_path = os.path.join(app.config['aria2_download_dir'], filename)
+        else:
+            parent_dir = os.path.dirname(file)
+            parent_name = os.path.basename(parent_dir)
+            archive_name = os.path.join(app.config['aria2_download_dir'], parent_name + ".zip")
+            # 打包父目录为 zip
+            shutil.make_archive(
+                base_name = os.path.splitext(archive_name)[0],
+                format = "zip",
+                root_dir = parent_dir,
+                base_dir = "."
+            )
+            local_file_path = archive_name
+
     # 完成下载后, 为压缩包添加元数据
     if os.path.exists(file): 
+        print(f"下载完成: {local_file_path}")
         if logger: logger.info(f"下载完成: {local_file_path}")
     return local_file_path
 
@@ -227,7 +242,18 @@ def parse_gmetadata(data):
     if not data['title_jpn'] == "": text = data['title_jpn']
     else: text = data['title']
     comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'] = ehentai.parse_filename(text)
+    if comicinfo['Writer'] == None:
+        if 'tags' in data:
+            artists = [t.split(":", 1)[1] for t in data['tags'] if t.startswith("artist:")]
+            if artists:
+                comicinfo['Writer'] = ", ".join(artists)
+    if comicinfo['Penciller'] == None:
+        if 'tags' in data:
+            groups = [t.split(":", 1)[1] for t in data['tags'] if t.startswith("group:")]
+            if groups:
+                comicinfo['Penciller'] = ", ".join(groups)
     return comicinfo
+
 def download_task(url, task_id, logger=None):
     try:
         if logger: logger.info(f"Task {task_id} started, downloading from: {url}")
@@ -254,10 +280,12 @@ def download_task(url, task_id, logger=None):
                 else:
                     dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename)
             if dl:
+                ml = os.path.join(app.config['real_download_dir'], os.path.basename(dl))
                 # 将 gmetadata 转换为兼容 comicinfo 的形式
                 metadata = parse_gmetadata(gmetadata)
-                cbz = nfotool.write_xml_to_zip(dl, metadata, copy=True, logger=logger)
-                    
+                if metadata['Writer']:
+                    cbz = nfotool.write_xml_to_zip(dl, ml, metadata, copy=True, logger=logger)
+
                 # 将文件移动到 Komga 媒体库
                 # 当带有 multi-work series 标签时, 将 metadata['Series'] 作为系列，否则统一使用 oneshot
                 if app.config['komga_toggle']:
