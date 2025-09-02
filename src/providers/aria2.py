@@ -62,7 +62,7 @@ class Aria2RPC:
     def listen_status(self, gid, logger=None):
         result = self.tell_status(gid)
         totallen = int(result['result']['totalLength'])
-        
+
         elapsed_time = 0
         elapsed_time_2 = 0
 
@@ -75,6 +75,20 @@ class Aria2RPC:
             # 写入日志
             if logger:
                 logger.info(f"Status: {status}, Downloaded: {completelen}/{totallen} B, Speed: {download_speed} B/s")
+
+            # 文件已完成长度达到总长度
+            if completelen >= totallen and totallen > 0:
+                if logger:
+                    logger.info("文件已下载完成，等待最多 5 秒确认 status 完成")
+                wait_sec = 0
+                while status != 'complete' and wait_sec < 5:
+                    time.sleep(1)
+                    wait_sec += 1
+                    result = self.tell_status(gid)
+                    status = result['result']['status']
+                if status != 'complete' and logger:
+                    logger.info("status 仍未更新为 complete，但已视为完成")
+                return result['result']['files'][0]['path']
 
             if completelen == 0:
                 elapsed_time += 5
