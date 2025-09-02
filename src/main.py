@@ -74,8 +74,11 @@ def get_task_logger(task_id):
     return logger, log_buffer
 
 def check_config():
-    TRUE_VALUES = {'true', '1', 'yes', 'on'}
+    TRUE_VALUES = {'true', 'enable', '1', 'yes', 'on'}
     config_parser.read(config_path, encoding='utf-8')
+    app.config['download_torrent'] = (
+        config_parser.get('general', 'download_torrent', fallback='false').lower() in TRUE_VALUES
+    )
     app.config['keep_torrents'] = (
         config_parser.get('general', 'keep_torrents', fallback='false').lower() in TRUE_VALUES
     )
@@ -152,6 +155,21 @@ def check_config():
     app.config['komga_toggle'] = komga_toggle
     app.config['checking_config'] = False
 
+def get_eh_mode(config, mode):
+    aria2 = config.get('aria2_toggle', False)
+    hath = config.get('hath_toggle', False)
+    download_torrent = mode in ("torrent", "1") if mode else config.get('download_torrent', True)
+    if hath and not aria2:
+        return "archive"
+    if aria2 and download_torrent:
+        if hath:
+            return "both"
+        else:
+            return "torrent"
+    elif hath:
+        return "archive"
+    return "both"
+
 def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None):
     rpc = aria2.Aria2RPC(app.config['aria2_server'], app.config['aria2_token'])
     if url != None:
@@ -190,6 +208,15 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None):
         print(f"下载完成: {local_file_path}")
         if logger: logger.info(f"下载完成: {local_file_path}")
     return local_file_path
+
+def fill_field(comicinfo, field, tags, prefixes):
+    if comicinfo.get(field):
+        return
+    for prefix in prefixes:
+        values = [t[len(prefix)+1:] for t in tags if t.startswith(f"{prefix}:")]
+        if values:
+            comicinfo[field] = ", ".join(values)
+            return
 
 def parse_eh_tags(tags):
     comicinfo = {'Genre':'Hentai', 'AgeRating':'R18+'}
@@ -249,42 +276,33 @@ def parse_gmetadata(data):
     else: text = data['title']
     comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'] = ehentai.parse_filename(text)
     if comicinfo['Writer'] == None:
-        if 'tags' in data:
-            artists = [t.split(":", 1)[1] for t in data['tags'] if t.startswith("artist:")]
-            if artists:
-                comicinfo['Writer'] = ", ".join(artists)
+        tags = data.get("tags", [])
+        fill_field(comicinfo, "Writer", tags, ["artist", "group"])
     if comicinfo['Penciller'] == None:
-        if 'tags' in data:
-            groups = [t.split(":", 1)[1] for t in data['tags'] if t.startswith("group:")]
-            if groups:
-                comicinfo['Penciller'] = ", ".join(groups)
+        tags = data.get("tags", [])
+        fill_field(comicinfo, "Penciller", tags, ["penciller", "group"])
     return comicinfo
 
-def download_task(url, task_id, logger=None):
+def download_task(url, mode, task_id, logger=None):
     try:
         if logger: logger.info(f"Task {task_id} started, downloading from: {url}")
         eh = ehentai.EHentaiTools(cookie=app.config['eh_cookie'], logger=logger)
         gmetadata = eh.get_gmetadata(url)
         filename = gmetadata['title_jpn'] + ' [' + f'{gmetadata['gid']}' + ']' + '.zip'
         # 根据功能启用情况设置下载模式
-        if app.config['aria2_toggle'] and not app.config['hath_toggle']:
-            eh_mode = "torrent"
-        elif not app.config['aria2_toggle'] and app.config['hath_toggle']:
-            eh_mode = "archive"
-        elif app.config['aria2_toggle'] and app.config['hath_toggle']:
-            eh_mode = "both"
+        eh_mode = get_eh_mode(app.config, mode)
         result = eh.archive_download(url=url, mode=eh_mode)
         if result:
             if result[0] == 'torrent':
-                dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename)
+                dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger)
                 if dl == None:
                     result = eh.archive_download(url=url, mode='archive')
             elif result[0] == 'archive':
-                if eh_mode == "archive":
+                if not app.config['aria2_toggle']:
                     # 通过 ehentai 的 session 直接下载
-                    dl = eh._download(url=result[1], dir=check_dirs('./data/download/ehentai'))
+                    dl = eh._download(url=result[1], path=os.path.join(check_dirs('./data/download/ehentai'), filename))
                 else:
-                    dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename)
+                    dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger)
             if dl:
                 ml = os.path.join(app.config['real_download_dir'], os.path.basename(dl))
                 # 将 gmetadata 转换为兼容 comicinfo 的形式
@@ -323,12 +341,13 @@ def download_task(url, task_id, logger=None):
 @app.route('/api/download', methods=['GET'])
 def download_url():
     url = request.args.get('url')
+    mode = request.args.get('mode')
     if not url:
         return jsonify({'error': 'No URL provided'}), 400
     # 两位年份+月日时分秒
     task_id = datetime.now().strftime('%y%m%d%H%M%S%f')
     logger, log_buffer = get_task_logger(task_id)
-    future = executor.submit(download_task, url, task_id, logger)
+    future = executor.submit(download_task, url, mode, task_id, logger)
     with tasks_lock:
         tasks[task_id] = TaskInfo(future, logger, log_buffer)
     return jsonify({'message': f"Download task for {url} started with task ID {task_id}.", 'task_id': task_id}), 202

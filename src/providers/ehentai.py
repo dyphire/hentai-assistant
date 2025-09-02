@@ -158,17 +158,17 @@ class EHentaiTools:
                 comicinfo['Series'] = search_series.group(1).strip()
                 break
         return comicinfo
-    def _download(self, url, dir):
+    def _download(self, url, path):
         try:
             with self.session.get(url, stream=True, timeout=30) as r:
                 r.raise_for_status()
-                with open(dir, 'wb') as f:
+                with open(path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
             if self.logger:
-                self.logger.info(f"下载完成: {dir}")
-            return dir
+                self.logger.info(f"下载完成: {path}")
+            return path
         except Exception as e:
             if self.logger:
                 self.logger.error(f"下载失败: {e}")
