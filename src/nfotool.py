@@ -4,76 +4,94 @@ import shutil
 from xml.dom.minidom import parseString
 import dicttoxml
 from utils import check_dirs
+from PIL import Image
+from natsort import natsorted
+import detectAd
 
 def make_comicinfo_xml(metadata):
-    return parseString(dicttoxml.dicttoxml(metadata, custom_root='ComicInfo', attr_type=False)).toprettyxml(indent="  ", encoding="UTF-8")
+    return parseString(
+        dicttoxml.dicttoxml(metadata, custom_root='ComicInfo', attr_type=False)
+    ).toprettyxml(indent="  ", encoding="UTF-8")
 
-# 将XML直接写入ZIP文件中
-def write_xml_to_zip(zip_file_path, mapped_file_path, metadata, copy=False, logger=None):
-    # 创建XML内容
-    xml_content = make_comicinfo_xml(metadata)      
-    
-    if copy == False:
-        # 未指定输出路径, 直接对原文档进行修改
-        # 创建临时内存缓冲区
-        temp_zip_buffer = io.BytesIO()
+def write_xml_to_zip(zip_file_path, mapped_file_path, metadata, app=None, logger=None):
+    zip_file_root = os.path.dirname(zip_file_path)
+    zip_file_name = os.path.basename(zip_file_path)
+    copy = app and app.config.get('keep_original_file', False)
+    remove_ad_flag = app and app.config.get('remove_ads', False)
 
-        # 打开现有的 ZIP 文件进行读取，并创建一个临时 ZIP 文件
-        with zipfile.ZipFile(zip_file_path, 'r') as existing_zip:
-            if "ComicInfo.xml" in existing_zip.namelist():
-                if logger: logger.info('已经存在 ComicInfo.xml, 即将替换为新的内容')
-                overwrite = True
-                # 打开内存中的新 ZIP 文件
-                with zipfile.ZipFile(temp_zip_buffer, 'w') as new_zip:
-                    # 遍历现有 ZIP 文件中的所有文件
-                    for item in existing_zip.infolist():
-                        # 如果不是要替换的 XML 文件，写入新 ZIP 文件
-                        if item.filename != "ComicInfo.xml":
-                            new_zip.writestr(item, existing_zip.read(item.filename))
-                    # 将新的 XML 内容写入 ZIP 文件，覆盖原来的文件
-                    new_zip.writestr("ComicInfo.xml", xml_content)
-            else: overwrite = False
-        if overwrite == True:
-            # 将内存中的 ZIP 文件内容保存回原来的文件路径，覆盖原来的 ZIP 文件
-            with open(zip_file_path, 'wb') as f:
-                f.write(temp_zip_buffer.getvalue())
-        else:
-            # 将XML内容写入zip文件
-            with zipfile.ZipFile(zip_file_path, 'a', zipfile.ZIP_DEFLATED) as zip_file:
-                zip_file.writestr("ComicInfo.xml", xml_content)
-        if logger: logger.info("ComicInfo.xml 写入完毕")
-            
-    else: # 重新生成一个新的cbz文件
-        zip_file_root = os.path.dirname(zip_file_path)
-        zip_file_name = os.path.basename(zip_file_path)
-        target_zip = os.path.join(zip_file_root, zip_file_name.rsplit('.', 1)[0] + '.tmp') # 防止撞名,先使用临时文件名,待迁移旧档案后,再进行重命名
-        # 打开现有的压缩包进行读取
-        with zipfile.ZipFile(zip_file_path, 'r') as src_zip:
-            # 创建一个新的压缩包
-            with zipfile.ZipFile(target_zip, 'w') as tgt_zip:
-                # 复制原始压缩包中的所有文件到新压缩包中
-                for file_info in src_zip.infolist():
-                    file_data = src_zip.read(file_info.filename)
-                    tgt_zip.writestr(file_info, file_data)
-                # 添加新的文本文件到新压缩包中
-                tgt_zip.writestr("ComicInfo.xml", xml_content)
+    print(f"处理文件: {zip_file_path}, 复制原文件: {copy}, 删除广告页: {remove_ad_flag}")
+    if logger: logger.info(f"处理文件: {zip_file_path}, 复制原文件: {copy}, 删除广告页: {remove_ad_flag}")
 
-        # 清理旧档案
+    xml_content = make_comicinfo_xml(metadata)
+
+    # 目标 ZIP
+    if copy:
+        target_zip_path = os.path.join(zip_file_root, zip_file_name.rsplit('.', 1)[0] + '.tmp')
+        zip_buffer = target_zip_path  # 用作物理文件路径
+    else:
+        zip_buffer = io.BytesIO()     # 内存缓冲覆盖原文件
+
+    # 读取原 ZIP 并写入目标 ZIP
+    with zipfile.ZipFile(zip_file_path, 'r') as src_zip, \
+         zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as tgt_zip:
+
+        # 获取所有图片并自然排序
+        img_files = [f for f in src_zip.namelist() if f.lower().endswith(
+            ('.jpg', '.jpeg', '.png', '.webp', '.avif', '.jxl')
+        )]
+        img_files = natsorted(img_files, key=lambda name: os.path.basename(name))
+
+        # 加载图片对象，保留在 img_objs
+        img_objs = []
+        for name in img_files:
+            with src_zip.open(name) as f:
+                img = Image.open(f)
+                img.load()
+                img_objs.append(img)
+
+        # 广告页检测
+        ad_pages = set()
+        if remove_ad_flag:
+            if logger: logger.info("正在检测广告页...")
+            ad_list = detectAd.get_ad_page(img_objs, detectAd.is_ad_img, img_files, logger=logger)
+            ad_pages = set(ad_list)
+            if ad_pages:
+                print(f"广告页已删除: {', '.join([img_files[i] for i in ad_pages])}")
+                if logger: logger.info(f"广告页已删除: {', '.join([img_files[i] for i in ad_pages])}")
+
+        # 写入非广告页
+        for idx, name in enumerate(img_files):
+            if idx in ad_pages:
+                continue
+            tgt_zip.writestr(name, src_zip.read(name))
+
+        # 写入 ComicInfo.xml
+        tgt_zip.writestr("ComicInfo.xml", xml_content)
+
+    # 保存文件
+    if copy:
+        # 移动原文件到 Completed
         try:
             completed_path = os.path.join(zip_file_root, 'Completed')
             os.renames(zip_file_path, os.path.join(check_dirs(completed_path), zip_file_name))
         except Exception as e:
             if logger: logger.error(e)
-            
-        # 为新档命名
-        new_file_path = target_zip.replace('.tmp', '.cbz')
-        os.rename(target_zip, new_file_path)
 
-        mapped_file_path = os.path.splitext(mapped_file_path)[0] + '.cbz'
-        if mapped_file_path != new_file_path:
-            os.makedirs(os.path.dirname(mapped_file_path), exist_ok=True)
-            shutil.move(new_file_path, mapped_file_path)
-            if logger: logger.info(f"文件移动到映射目录: {mapped_file_path}")
-            return mapped_file_path
+        new_file_path = target_zip_path.replace('.tmp', '.cbz')
+        os.rename(target_zip_path, new_file_path)
+    else:
+        # 内存缓冲写回原文件
+        with open(zip_file_path, 'wb') as f:
+            f.write(zip_buffer.getvalue())
+        new_file_path = zip_file_path
 
-        return new_file_path
+    # 移动到映射目录
+    mapped_file_path = os.path.splitext(mapped_file_path)[0] + '.cbz'
+    if mapped_file_path != new_file_path:
+        os.makedirs(os.path.dirname(mapped_file_path), exist_ok=True)
+        shutil.move(new_file_path, mapped_file_path)
+        if logger: logger.info(f"文件移动到映射目录: {mapped_file_path}")
+        print(f"文件移动到映射目录: {mapped_file_path}")
+        return mapped_file_path
+
+    return new_file_path

@@ -12,7 +12,7 @@ def check_dirs(path):
         os.makedirs(path)
     return path
 
-# 判断是否为 URL            
+# 判断是否为 URL
 def is_url(text):
     # 正则表达式用于匹配 URL
     url_pattern = re.compile(r'(https?://[^\s]+)')

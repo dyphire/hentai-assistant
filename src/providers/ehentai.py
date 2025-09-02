@@ -19,7 +19,7 @@ def parse_filename(text):
         author = search_author.group(1)
         search_writer = re.search(r'(.+?)\s*\((.+?)\)', search_author.group(1))
         # 判断作者和画师
-        if not search_writer == None: 
+        if not search_writer == None:
             writer = search_writer.group(1) # 同人志的情况下，把社团视为 writer
             penciller = search_writer.group(2) # 把该漫画的作者视为 penciller
         else:
@@ -62,7 +62,7 @@ def male_only_taglist():
         with open(json_path) as f:
             return json.load(f)['content']
     m_list = []
-    if not os.path.exists("data/ehentai/fetish_listing.html"): 
+    if not os.path.exists("data/ehentai/fetish_listing.html"):
         url = "https://ehwiki.org/wiki/Fetish_Listing"
         global headers
         response = requests.get(url, headers=headers)
@@ -91,7 +91,7 @@ class EHentaiTools:
         self.session = session
         if logger: self.logger = logger
         else: self.logger = None
-    
+
     def is_valid_cookie(self):
         try:
             response = self.session.get('https://e-hentai.org/home.php', allow_redirects=True, timeout=10)
@@ -103,9 +103,9 @@ class EHentaiTools:
                 if self.logger: self.logger.info("成功访问 https://e-hentai.org/home.php, Archive 下载功能可用")
                 return True
         except Exception as e:
-            if self.logger: self.logger.info("无法打开 https://e-hentai.org/home.php, 请检查网络", str(e))
+            if self.logger: self.logger.info(f"无法打开 https://e-hentai.org/home.php, 请检查网络: {e}")
             return None
-        
+
     # 从 E-Hentai API 获取画廊信息
     def get_gmetadata(self, url):
         API = 'https://api.e-hentai.org/api.php'
@@ -128,7 +128,7 @@ class EHentaiTools:
                 return response.json()['gmetadata'][0]
         else:
             if self.logger: self.logger.error(f'解析{url}时遇到了错误')
-            
+
     # 解析来自 E-Hentai API 的画廊信息
     def parse_gmetadata(self, data):
         comicinfo = {}
@@ -158,17 +158,17 @@ class EHentaiTools:
                 comicinfo['Series'] = search_series.group(1).strip()
                 break
         return comicinfo
-    def _download(self, url, dir):
+    def _download(self, url, path):
         try:
             with self.session.get(url, stream=True, timeout=30) as r:
                 r.raise_for_status()
-                with open(dir, 'wb') as f:
+                with open(path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
                         if chunk:
                             f.write(chunk)
             if self.logger:
-                self.logger.info(f"下载完成: {dir}")
-            return dir
+                self.logger.info(f"下载完成: {path}")
+            return path
         except Exception as e:
             if self.logger:
                 self.logger.error(f"下载失败: {e}")
@@ -192,7 +192,7 @@ class EHentaiTools:
                         # 提取URL
                         start_idx = onclick_value.find("'") + 1
                         end_idx = onclick_value.find("'", start_idx)
-                        torrent_window_url = onclick_value[start_idx:end_idx]                    
+                        torrent_window_url = onclick_value[start_idx:end_idx]
                         torrent_list = {}
                         # 请求 torrent_list_url
                         response = self.session.get(torrent_window_url)
@@ -239,7 +239,7 @@ class EHentaiTools:
                     start_idx = onclick_value.find("'") + 1
                     end_idx = onclick_value.find("'", start_idx)
                     download_url = onclick_value[start_idx:end_idx]
-                    if self.logger: self.logger.info("Archive Download Link:", download_url)
+                    if self.logger: self.logger.info(f"Archive Download Link: {download_url}")
                 else:
                     if self.logger: self.logger.info("No matching element found.")
                 data = {
@@ -256,7 +256,7 @@ class EHentaiTools:
                     # 提取 href 属性内容
                     hrefs = [a['href'] for a in a_tags_with_onclick]
                     final_url = hrefs[0] + '?start=1'
-                    if self.logger: self.logger.info("开始下载: ", final_url)
+                    if self.logger: self.logger.info(f"开始下载: {final_url}")
                     # 返回种子地址
                     return 'archive', final_url
                 except Exception as e:
