@@ -62,7 +62,7 @@ class Aria2RPC:
     def listen_status(self, gid, logger=None):
         result = self.tell_status(gid)
         totallen = int(result['result']['totalLength'])
-        
+
         elapsed_time = 0
         elapsed_time_2 = 0
 
@@ -75,7 +75,7 @@ class Aria2RPC:
             # 写入日志
             if logger:
                 logger.info(f"Status: {status}, Downloaded: {completelen}/{totallen} B, Speed: {download_speed} B/s")
-            
+
             # 文件已完成长度达到总长度
             if completelen >= totallen and totallen > 0:
                 if logger:

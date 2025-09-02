@@ -15,7 +15,7 @@ from providers import aria2
 from providers import ehentai
 from utils import check_dirs
 import nfotool
-    
+
 app = Flask(__name__)
 # 设置5001端口为默认端口
 app.config['port'] = 5001
@@ -74,11 +74,17 @@ def get_task_logger(task_id):
     return logger, log_buffer
 
 def check_config():
+    TRUE_VALUES = {'true', '1', 'yes', 'on'}
     config_parser.read(config_path, encoding='utf-8')
-    if 'keep_torrents' in config_parser and config_parser['general']['keep_torrents'].lower() in ['true', '1', 'yes']:
-        app.config['keep_torrents'] = True
-    else:
-        app.config['keep_torrents'] = False
+    app.config['keep_torrents'] = (
+        config_parser.get('general', 'keep_torrents', fallback='false').lower() in TRUE_VALUES
+    )
+    app.config['keep_original_file'] = (
+        config_parser.get('general', 'keep_original_file', fallback='false').lower() in TRUE_VALUES
+    )
+    app.config['remove_ads'] = (
+        config_parser.get('general', 'remove_ads', fallback='false').lower() in TRUE_VALUES
+    )
     # 测试 E-Hentai 的连接
     if 'cookie' in config_parser['ehentai'] and not config_parser['ehentai']['cookie'] == '':
         app.config['eh_cookie'] = {"cookie": config_parser['ehentai']['cookie']}
@@ -86,8 +92,8 @@ def check_config():
         app.config['eh_cookie'] = {"cookie": ""}
     eh = ehentai.EHentaiTools(cookie=app.config['eh_cookie'], logger=global_logger)
     hath_toggle = eh.is_valid_cookie()
-    # 测试 Aria2 RPC 的连接    
-    if 'enable' in config_parser['aria2'] and config_parser['aria2']['enable'].lower() in ['true', '1', 'yes']: 
+    # 测试 Aria2 RPC 的连接
+    if 'enable' in config_parser['aria2'] and config_parser['aria2']['enable'].lower() in ['true', '1', 'yes']:
         global_logger.info("开始测试 Aria2 RPC 的连接")
         app.config['aria2_server'] = config_parser['aria2']['server'].rstrip('/')
         app.config['aria2_token'] = config_parser['aria2']['token']
@@ -113,7 +119,7 @@ def check_config():
         except Exception as e:
             global_logger.error(f"Aria2 RPC 连接异常: {e}")
             aria2_toggle = False
-    else:  
+    else:
         global_logger.info("Aria2 RPC 功能未启用")
         aria2_toggle = False
     # 测试 Komga API 的连接
@@ -159,7 +165,7 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None):
     gid = result['result']
     # 监视 aria2 的下载进度
     file = rpc.listen_status(gid)
-    if file == None: 
+    if file == None:
         if logger: logger.info("疑似为死种, 尝试用 Arichive 的方式下载")
         return None
     else:
@@ -180,7 +186,7 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None):
             local_file_path = archive_name
 
     # 完成下载后, 为压缩包添加元数据
-    if os.path.exists(file): 
+    if os.path.exists(file):
         print(f"下载完成: {local_file_path}")
         if logger: logger.info(f"下载完成: {local_file_path}")
     return local_file_path
@@ -284,7 +290,7 @@ def download_task(url, task_id, logger=None):
                 # 将 gmetadata 转换为兼容 comicinfo 的形式
                 metadata = parse_gmetadata(gmetadata)
                 if metadata['Writer']:
-                    cbz = nfotool.write_xml_to_zip(dl, ml, metadata, copy=True, logger=logger)
+                    cbz = nfotool.write_xml_to_zip(dl, ml, metadata, app=app, logger=logger)
 
                 # 将文件移动到 Komga 媒体库
                 # 当带有 multi-work series 标签时, 将 metadata['Series'] 作为系列，否则统一使用 oneshot
@@ -387,7 +393,7 @@ def show_config():
             return "❌"
         else:
             return "⚠️"
-    
+
     # 状态信息
     status_html = f'''
     <br>

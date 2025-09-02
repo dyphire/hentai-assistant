@@ -28,7 +28,7 @@ class KomgaAPI:
             return self.session.get(f'{self.server}/api/v1/libraries/{library_id}')
         else:
             return self.session.get(self.server + '/api/v1/libraries')
-        
+
     def scan_library(self, library_id, deep=False):
         if deep == False:
             return self.session.post(self.server + f'/api/v1/libraries/{library_id}/scan?deep=false')
@@ -87,7 +87,7 @@ class KomgaAPI:
         # metadata 中也包含一些 series level 的数据,因此也要同时获取 series_data 用于合并数据
         series_id = book_data['seriesId']
         series_data = self.get_series(series_id)
-        if logger:  logger.info('开始写入数据', metadata)
+        if logger:  logger.info(f"开始写入数据: {metadata}")
         series_params = {}
         # 先处理 book level 的数据
         book_params = {}
@@ -137,7 +137,7 @@ class KomgaAPI:
                     book_params['tags'].append(i)
         # 提交 book level 的数据
         self.session.patch(self.server + f'/api/v1/books/{book_data['id']}/metadata', json=book_params)
-        
+
         # 接着处理 series level 的数据
         if 'Series' in metadata:
             series_params['Title'] = metadata['Series']
