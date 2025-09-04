@@ -5,3 +5,4 @@ langcodes
 dicttoxml
 natsort
 pyzbar
+pillow
