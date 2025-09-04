@@ -300,11 +300,14 @@ def download_task(url, mode, task_id, logger=None):
             elif result[0] == 'archive':
                 if not app.config['aria2_toggle']:
                     # 通过 ehentai 的 session 直接下载
-                    dl = eh._download(url=result[1], path=os.path.join(check_dirs('./data/download/ehentai'), filename))
+                    dl = eh._download(url=result[1], path=os.path.join(os.path.abspath(check_dirs('./data/download/ehentai')), filename))
                 else:
                     dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger)
             if dl:
-                ml = os.path.join(app.config['real_download_dir'], os.path.basename(dl))
+                if 'real_download_dir' in app.config:
+                    ml = os.path.join(app.config['real_download_dir'], os.path.basename(dl))
+                else:
+                    ml = dl
                 # 将 gmetadata 转换为兼容 comicinfo 的形式
                 metadata = parse_gmetadata(gmetadata)
                 if metadata['Writer']:

@@ -255,7 +255,8 @@ class EHentaiTools:
                     a_tags_with_onclick = a_soup.find_all('a', onclick=True)
                     # 提取 href 属性内容
                     hrefs = [a['href'] for a in a_tags_with_onclick]
-                    final_url = hrefs[0] + '?start=1'
+                    base_url = hrefs[0].replace("?autostart=1", "")
+                    final_url = base_url + '?start=1'
                     if self.logger: self.logger.info(f"开始下载: {final_url}")
                     # 返回种子地址
                     return 'archive', final_url
