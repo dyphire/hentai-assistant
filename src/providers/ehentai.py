@@ -10,13 +10,20 @@ headers = {
 }
 
 def parse_filename(text):
-    # 去除所有括号内的内容,将清理后的文本作为标题
+    # 去除所有括号内的内容, 将清理后的文本作为标题
     title = re.sub(r'\[.*?\]|\(.*?\)', '', text).strip()
     print(f'从文件名{text}中解析到 Title:', title)
+    # 匹配第一个活动号 (Cxxx)
+    match_c = re.search(r'\(C\d+\)', text)
+    if match_c:
+        # 活动号后的文本
+        after_c = text[match_c.end():].strip()
+    else:
+        # 没有活动号，就从头开始
+        after_c = text
     # 匹配开头[]内的内容,在EH的命名规范中,它总是代表作者信息
-    search_author = re.search(r'\[(.+?)\]', text)
+    search_author = re.search(r'\[(.+?)\]', after_c)
     if not search_author == None:
-        author = search_author.group(1)
         search_writer = re.search(r'(.+?)\s*\((.+?)\)', search_author.group(1))
         # 判断作者和画师
         if not search_writer == None:
@@ -168,6 +175,7 @@ class EHentaiTools:
                             f.write(chunk)
             if self.logger:
                 self.logger.info(f"下载完成: {path}")
+            print(f"下载完成: {path}")
             return path
         except Exception as e:
             if self.logger:
@@ -255,7 +263,8 @@ class EHentaiTools:
                     a_tags_with_onclick = a_soup.find_all('a', onclick=True)
                     # 提取 href 属性内容
                     hrefs = [a['href'] for a in a_tags_with_onclick]
-                    final_url = hrefs[0] + '?start=1'
+                    base_url = hrefs[0].replace("?autostart=1", "")
+                    final_url = base_url + '?start=1'
                     if self.logger: self.logger.info(f"开始下载: {final_url}")
                     # 返回种子地址
                     return 'archive', final_url
