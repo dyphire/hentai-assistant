@@ -6,3 +6,4 @@ dicttoxml
 natsort
 pyzbar
 pillow
+numpy
