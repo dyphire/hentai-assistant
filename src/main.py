@@ -16,6 +16,8 @@ from providers import ehentai
 from utils import check_dirs
 import nfotool
 
+from providers.ehtranslator import EhTagTranslator
+
 app = Flask(__name__)
 # 设置5001端口为默认端口
 app.config['port'] = 5001
@@ -84,6 +86,12 @@ def check_config():
     )
     app.config['keep_original_file'] = (
         config_parser.get('general', 'keep_original_file', fallback='false').lower() in TRUE_VALUES
+    )
+    app.config['tags_translation'] = (
+        config_parser.get('general', 'tags_translation', fallback='false').lower() in TRUE_VALUES
+    )
+    app.config['prefer_japanese_title'] = (
+        config_parser.get('general', 'prefer_japanese_title', fallback='false').lower() in TRUE_VALUES
     )
     app.config['remove_ads'] = (
         config_parser.get('general', 'remove_ads', fallback='false').lower() in TRUE_VALUES
@@ -154,6 +162,7 @@ def check_config():
     app.config['aria2_toggle'] = aria2_toggle
     app.config['komga_toggle'] = komga_toggle
     app.config['checking_config'] = False
+    app.translator = EhTagTranslator(enable_translation=app.config.get('tags_translation', True))
 
 def get_eh_mode(config, mode):
     aria2 = config.get('aria2_toggle', False)
@@ -213,7 +222,12 @@ def fill_field(comicinfo, field, tags, prefixes):
     if comicinfo.get(field):
         return
     for prefix in prefixes:
-        values = [t[len(prefix)+1:] for t in tags if t.startswith(f"{prefix}:")]
+        values = []
+        for t in tags:
+            if t.startswith(f"{prefix}:"):
+                name = t[len(prefix)+1:]
+                name = app.translator.get_translation(name, prefix)
+                values.append(name)
         if values:
             comicinfo[field] = ", ".join(values)
             return
@@ -235,20 +249,25 @@ def parse_eh_tags(tags):
                 # 提取 parody 内容至 SeriesGroup
                 if not tag_name == 'original':
                     kanji_parody = ehentai.get_original_tag(tag_name) # 将提取到合集的 Tag 翻译为日文
-                    tag_list.append(tag) #  此处保留 namespace，方便所有 parody 相关的 tag 能排序在一块
+                    tag_name = app.translator.get_translation(tag_name, namespace)
+                    tag_list.append(f"{namespace}:{tag_name}") #  此处保留 namespace，方便所有 parody 相关的 tag 能排序在一块
                     if not kanji_parody == None:
                         comicinfo['Genre'] = comicinfo['Genre'] + ', Parody'
-                        collectionlist.append(kanji_parody)
+                        tag_name = app.translator.get_translation(kanji_parody, namespace)
+                        collectionlist.append(tag_name)
             elif namespace in ['character']:
-                tag_list.append(tag) # 保留 namespace，理由同 parody
+                tag_name = app.translator.get_translation(tag_name, namespace)
+                tag_list.append(f"{namespace}:{tag_name}") # 保留 namespace，理由同 parody
             elif namespace == 'female' or namespace == 'mixed':
+                tag_name = app.translator.get_translation(tag_name, namespace)
                 tag_list.append(tag_name) # 去掉 namespace, 仅保留内容
             elif namespace == 'male': # male 与 female 存在相同的标签, 但它们在作品中表达的含义是不同的, 为了减少歧义，这里将会丢弃所有 male 相关的共同标签，但是保留 male 限定的标签
                 if tag_name in ehentai.male_only_taglist():
+                    tag_name = app.translator.get_translation(tag_name, namespace)
                     tag_list.append(tag_name)
             elif namespace == 'other':
-                #if not 'extraneous' in matchTag.group(2):
-                tag_list.append(matchTag.group(2))
+                tag_name = app.translator.get_translation(tag_name, namespace)
+                tag_list.append(tag_name)
     # 进行以下去重
     tag_list_sorted = sorted(set(tag_list), key=tag_list.index)
     # 为 webtoon 以外的漫画指定翻页顺序
@@ -267,20 +286,27 @@ def parse_gmetadata(data):
         comicinfo.update(parse_eh_tags(data['tags']))
     # 把 Manga 以外的 category 添加到 Tags，主要用途在于把 doujinshi 作为标签，方便在商业作中筛选
     if not data['category'] == 'Manga':
+        category = app.translator.get_translation(data['category'].lower(), 'category')
+        if 'Genre' in comicinfo:
+            comicinfo['Genre'] = comicinfo['Genre'] + ', ' + category
+        else:
+            comicinfo['Genre'] = category
         if 'Tags' in comicinfo:
             comicinfo['Tags'] = comicinfo['Tags'] + ', ' + data['category'].lower()
         else:
             comicinfo['Tags'] = data['category'].lower()
     # 从标题中提取作者信息
-    if not data['title_jpn'] == "": text = data['title_jpn']
-    else: text = data['title']
+    if app.config['prefer_japanese_title'] and not data['title_jpn'] == "":
+        text = data['title_jpn']
+    else:
+        text = data['title']
     comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'] = ehentai.parse_filename(text)
-    if comicinfo['Writer'] == None:
+    if comicinfo['Writer'] == None or app.config['tags_translation']:
         tags = data.get("tags", [])
-        fill_field(comicinfo, "Writer", tags, ["artist", "group"])
-    if comicinfo['Penciller'] == None:
+        fill_field(comicinfo, "Writer", tags, ["group", "artist"])
+    if comicinfo['Penciller'] == None or app.config['tags_translation']:
         tags = data.get("tags", [])
-        fill_field(comicinfo, "Penciller", tags, ["penciller", "group"])
+        fill_field(comicinfo, "Penciller", tags, ["artist", "group"])
     return comicinfo
 
 def download_task(url, mode, task_id, logger=None):

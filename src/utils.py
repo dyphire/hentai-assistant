@@ -1,4 +1,5 @@
 import os, json, re
+import unicodedata
 import logging
 from logging.handlers import RotatingFileHandler
 from glob import glob
@@ -24,6 +25,13 @@ def is_url(text):
         return path
     else:
         return path.replace(config.komga_path, config.komga_mapped_dir)'''
+
+# 移除字符串中的表情符号
+def remove_emoji(text):
+    return ''.join(
+        c for c in text
+        if not unicodedata.category(c).startswith('So')
+    )
 
 def get_task_logger(task_id=None):
     MAX_UUID_LOG_FILES = 5

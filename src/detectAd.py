@@ -12,6 +12,7 @@ qr_code_white_list = [
     r"^https://twitter\.com",
     r"^https://x\.com",
     r"^https://www\.pixiv\.net",
+    r"^https://www\.dmm\.co\.jp",
     r"^https://fantia\.jp",
     r"^https://marshmallow-qa\.com",
     r"^https://www\.dlsite\.com",
