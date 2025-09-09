@@ -11,7 +11,7 @@ WORKDIR /app/frontend
 COPY webui/package*.json ./
 
 # 安装依赖（生产环境）
-RUN npm ci --only=production && npm cache clean --force
+RUN npm ci && npm cache clean --force
 
 # 复制源码并构建
 COPY webui/ ./
