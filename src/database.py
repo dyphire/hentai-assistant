@@ -184,8 +184,13 @@ class TaskDatabase:
         with self.lock:
             try:
                 with self._get_conn() as conn:
-                    status_cn = self.STATUS_MAP.get(status, status)
-                    conn.execute('DELETE FROM tasks WHERE status = ?', (status_cn,))
+                    if status == 'all_except_in_progress':
+                        # 清除除了进行中任务外的所有任务
+                        conn.execute('DELETE FROM tasks WHERE status != ?', ('进行中',))
+                    else:
+                        # 将前端状态映射为数据库状态
+                        status_cn = self.STATUS_MAP.get(status, status)
+                        conn.execute('DELETE FROM tasks WHERE status = ?', (status_cn,))
                     conn.commit()
                 return True
             except sqlite3.Error as e:

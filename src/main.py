@@ -868,18 +868,34 @@ def clear_tasks():
     with tasks_lock:
         tasks_to_keep = {}
         for tid, task_info in tasks.items():
-            # 支持清除"失败"状态（只包括"错误"，不包括"取消"）
-            if status_to_clear == "失败":
-                if task_info.status == "错误":
-                    # 清除日志缓冲区
-                    task_info.log_buffer.close()
-                else:
-                    tasks_to_keep[tid] = task_info
-            elif task_info.status == status_to_clear:
+            should_clear = False
+            
+            if status_to_clear == "all_except_in_progress":
+                # 清除除了进行中任务外的所有任务
+                should_clear = task_info.status != "进行中"
+            elif status_to_clear == "failed":
+                # 清除失败状态的任务（对应数据库中的"错误"状态）
+                should_clear = task_info.status == "错误"
+            elif status_to_clear == "completed":
+                # 清除已完成的任务
+                should_clear = task_info.status == "完成"
+            elif status_to_clear == "cancelled":
+                # 清除取消的任务
+                should_clear = task_info.status == "取消"
+            elif status_to_clear == "in-progress":
+                # 清除进行中的任务
+                should_clear = task_info.status == "进行中"
+            else:
+                # 直接状态匹配
+                should_clear = task_info.status == status_to_clear
+            
+            if should_clear:
                 # 清除日志缓冲区
-                task_info.log_buffer.close()
+                if hasattr(task_info, 'log_buffer'):
+                    task_info.log_buffer.close()
             else:
                 tasks_to_keep[tid] = task_info
+                
         tasks.clear()
         tasks.update(tasks_to_keep)
 
