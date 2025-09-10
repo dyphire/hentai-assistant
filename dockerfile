@@ -21,7 +21,7 @@ RUN npm run build && \
     npm prune --production
 
 # 阶段2: 构建 Python 后端
-FROM python:3.13-slim AS backend
+FROM python:3.11-slim-bookworm AS python-builder
 
 # 设置环境变量
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -30,28 +30,52 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DEBIAN_FRONTEND=noninteractive
 
-# 安装系统依赖
+# 安装编译依赖
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     g++ \
     libc6-dev \
     python3-dev \
-    libzbar0 \
     libjpeg-dev \
     zlib1g-dev \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# 预编译依赖
+COPY requirements.txt .
+RUN pip install --upgrade pip && \
+    pip wheel --no-cache-dir --wheel-dir=/app/wheels -r requirements.txt
+
+# 阶段3: 最终镜像
+FROM python:3.11-slim-bookworm AS backend
+
+# 设置环境变量
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DEBIAN_FRONTEND=noninteractive
+
+# 安装运行时依赖
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libzbar0 \
     curl \
     && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # 创建非root用户
 RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
 
-# 复制 requirements.txt 并安装依赖
-COPY requirements.txt ./
+# 安装Python依赖
+COPY --from=python-builder /app/wheels /wheels
+COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+    pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt && \
+    rm -rf /wheels
 
 # 复制应用代码
 COPY src/ ./src/

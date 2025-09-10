@@ -28,15 +28,14 @@ docker-compose*.yml
 Thumbs.db
 
 # 前端开发文件
-src/webui/node_modules/
-src/webui/dist/
-src/webui/.vscode/
-src/webui/e2e/
-src/webui/playwright.config.ts
-src/webui/vitest.config.ts
-src/webui/tsconfig.*.json
-src/webui/package-lock.json
-src/webui/coverage/
+webui/node_modules/
+webui/dist/
+webui/.vscode/
+webui/e2e/
+webui/playwright.config.ts
+webui/vitest.config.ts
+webui/tsconfig.*.json
+webui/coverage/
 
 # Python 开发文件
 __pycache__/
