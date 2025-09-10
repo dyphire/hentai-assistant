@@ -884,13 +884,13 @@ const confirmClearTasks = async () => {
   let statusName: string;
 
   if (currentFilter.value === 'completed') {
-    statusToClear = '完成';
+    statusToClear = 'completed';
     statusName = '已完成';
   } else if (currentFilter.value === 'cancelled') {
-    statusToClear = '取消';
+    statusToClear = 'cancelled';
     statusName = '取消';
   } else if (currentFilter.value === 'failed') {
-    statusToClear = '失败';
+    statusToClear = 'failed';
     statusName = '失败';
   } else if (currentFilter.value === 'all') {
     statusToClear = 'all_except_in_progress';

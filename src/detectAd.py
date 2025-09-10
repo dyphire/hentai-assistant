@@ -19,21 +19,6 @@ qr_code_white_list = [
     r"^https://hitomi\.la",
 ]
 
-# 广告文件名正则列表
-ad_file_patterns_re = [
-    re.compile(r'^zzz.*\.jpg$', re.IGNORECASE),
-    re.compile(r'^zzz.*\.png$', re.IGNORECASE),
-    re.compile(r'^zzz.*\.webp$', re.IGNORECASE),
-    re.compile(r'^YZv5\.0\.png$', re.IGNORECASE),
-    re.compile(r'脸肿汉化组招募', re.IGNORECASE),
-    re.compile(r'.*_ZZZZ0.*\..*$', re.IGNORECASE),
-    re.compile(r'.*_ZZZZ1.*\..*$', re.IGNORECASE),
-    re.compile(r'.*_zzz.*\..*$', re.IGNORECASE),
-    re.compile(r'無邪気漢化組招募圖_ver.*\.png$', re.IGNORECASE),
-    re.compile(r'無邪気無修宇宙分組_ver.*\.png$', re.IGNORECASE),
-    re.compile(r'^_.+\.jpg$', re.IGNORECASE),
-]
-
 # 判断是否彩色图片
 def is_color_img(img: Image.Image) -> bool:
     arr = np.array(img)
@@ -66,7 +51,7 @@ def is_ad_img(img: Image.Image, logger=None) -> bool:
     if max(img.width, img.height) > MAX_DIM:
         scale = MAX_DIM / max(img.width, img.height)
         new_size = (int(img.width * scale), int(img.height * scale))
-        img = img.resize(new_size, Image.LANCZOS)
+        img = img.resize(new_size, Image.Resampling.LANCZOS)
 
     # 黑白图肯定不是广告
     if not is_color_img(img):
@@ -109,74 +94,3 @@ def is_ad_img(img: Image.Image, logger=None) -> bool:
         else: print("[DEBUG] 未识别到二维码，非广告")
         return False
 
-# 获取广告页
-def get_ad_page(
-    lst: List[T],
-    is_ad_page: Callable[[T], bool],
-    filenames: Optional[List[str]] = None,
-    logger=None,
-    ad_list: Optional[Set[int]] = None,
-) -> Set[int]:
-    if ad_list is None:
-        ad_list = set()
-
-    normal_num = 0
-    # 检查最后十张
-    for i in range(len(lst)-1, max(len(lst)-10, 2), -1):
-        if i in ad_list:
-            continue
-        # 先根据文件名正则匹配广告页
-        if filenames:
-            name = os.path.basename(filenames[i])
-            if any(pat.search(name) for pat in ad_file_patterns_re):
-                ad_list.add(i)
-                if logger:
-                    logger.debug(f"[DEBUG] 文件名匹配广告: {i} => {name}")
-                else:
-                    print(f"[DEBUG] 文件名匹配广告: {i} => {name}")
-                continue  # 匹配到文件名就跳过二维码检测
-
-        item = lst[i]
-        if not item:
-            break
-
-        # 二维码检测广告
-        is_ad = is_ad_page(item, logger)
-        if is_ad:
-            ad_list.add(i)
-            if logger:
-                logger.debug(f"[DEBUG] 二维码检测广告: {i} => {filenames[i] if filenames else 'img'}")
-            else:
-                print(f"[DEBUG] 二维码检测广告: {i} => {filenames[i] if filenames else 'img'}")
-        # 找到连续三张正常漫画页后中断
-        elif normal_num > 2:
-            break
-        else:
-            normal_num += 1
-
-    # 根据邻页规则补充广告
-    ad_num = 0
-    for i in range(min(ad_list, default=0), len(lst)):
-        if i in ad_list:
-            ad_num += 1
-            continue
-        # 连续两张广告后面的肯定也都是广告，夹在两张广告中间的肯定也是广告
-        if ad_num >= 2 or ((i - 1 in ad_list) and (i + 1 in ad_list)):
-            ad_list.add(i)
-            if logger:
-                logger.debug(f"[DEBUG] 根据邻页规则补充广告: {i} => {filenames[i] if filenames else 'img'}")
-            else:
-                print(f"[DEBUG] 根据邻页规则补充广告: {i} => {filenames[i] if filenames else 'img'}")
-        else:
-            ad_num = 0
-
-    if logger:
-        logger.info(f"[INFO] 最终广告页索引: {sorted(ad_list)}")
-        if filenames:
-            logger.info(f"[INFO] 最终广告页文件: {', '.join([filenames[i] for i in sorted(ad_list)])}")
-    else:
-        print(f"[INFO] 最终广告页索引: {sorted(ad_list)}")
-        if filenames:
-            print(f"[INFO] 最终广告页文件: {', '.join([filenames[i] for i in sorted(ad_list)])}")
-
-    return ad_list
