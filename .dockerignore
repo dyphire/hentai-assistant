@@ -34,7 +34,6 @@ webui/.vscode/
 webui/e2e/
 webui/playwright.config.ts
 webui/vitest.config.ts
-webui/tsconfig.*.json
 webui/coverage/
 
 # Python 开发文件
