@@ -136,7 +136,7 @@ class KomgaAPI:
                 if i not in tags:
                     book_params['tags'].append(i)
         # 提交 book level 的数据
-        self.session.patch(self.server + f'/api/v1/books/{book_data['id']}/metadata', json=book_params)
+        self.session.patch(self.server + f'/api/v1/books/{book_data.get("id")}/metadata', json=book_params)
 
         # 接着处理 series level 的数据
         if 'Series' in metadata:
@@ -164,7 +164,7 @@ class KomgaAPI:
                     series_params['ageRatingLock'] = True
         if 'Manga' in metadata and metadata['Manga'] == "YesAndRightToLeft":
             series_params['readingDirection'] = "RIGHT_TO_LEFT"
-        self.session.patch(self.server + f'/api/v1/series/{series_data['id']}/metadata', json=series_params)
+        self.session.patch(self.server + f'/api/v1/series/{series_data.get("id")}/metadata', json=series_params)
 
         # 有 collections 的情况
         if 'SeriesGroup' in metadata:
@@ -181,7 +181,7 @@ class KomgaAPI:
                 for c in self.get_collections(library_id=series_data['libraryId']):
                     if 'collection' in c['name']: # 已经存在合集的情况
                         collections_params['seriesIds'] = collections_params['seriesIds'] + c['seriesIds']
-                        self.session.patch(self.server + f'/api/v1/collections/{c['id']}', params=collections_params)
+                        self.session.patch(self.server + f'/api/v1/collections/{c.get("id")}', params=collections_params)
                         break
                     else: # 否则,新建一个合集
                         self.session.patch(self.server + f'/api/v1/collections/', params=collections_params)
