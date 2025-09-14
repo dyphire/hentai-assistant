@@ -19,6 +19,7 @@ export default defineConfig({
     },
   },
   server: {
+    host: '0.0.0.0', // 允许外部访问
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:5001', // Flask 后端地址
