@@ -27,8 +27,8 @@ from providers.ehtranslator import EhTagTranslator
 # Flask 将从这个目录提供静态文件
 app = Flask(
     __name__,
-    static_folder='webui/dist/assets', # Vue.js 构建后的静态文件（JS, CSS, 图片等）
-    static_url_path='/assets' # 访问静态文件的 URL 前缀
+    static_folder='webui/dist', # Vue.js 构建后的完整目录（包含index.html和assets）
+    static_url_path='/' # 静态文件URL前缀改为根路径
 )
 CORS(app) # 在 Flask 应用中启用 CORS
 # 设置5001端口为默认端口
@@ -985,11 +985,17 @@ def serve_vue_app(path):
     if app.debug: # 如果是调试模式 (开发环境)
         return redirect(f"http://localhost:5173/{path}") # 重定向到 Vue 开发服务器
     else: # 如果是生产模式
-        # 确保 index.html 存在于 webui/dist 目录
-        index_path = os.path.join(os.path.dirname(__file__), 'webui', 'dist', 'index.html')
+        # 检查是否是API请求或静态资源请求
+        if path.startswith('api/') or path.startswith('assets/'):
+            # 让Flask正常处理API和静态资源
+            return app.send_static_file(path)
+
+        # 对于其他所有请求，返回index.html（SPA路由）
+        static_dir = app.static_folder or 'webui/dist'
+        index_path = os.path.join(static_dir, 'index.html')
         if not os.path.exists(index_path):
             return "Vue.js application not built. Please run 'npm run build' in the webui directory.", 500
-        return send_from_directory(os.path.join(os.path.dirname(__file__), 'webui', 'dist'), 'index.html')
+        return send_from_directory(static_dir, 'index.html')
 
 if __name__ == '__main__':
     # 检查配置文件是否存在，如果不存在则创建示例配置
@@ -1036,6 +1042,9 @@ if __name__ == '__main__':
 
         try:
             # 在生产模式下，debug 应该设置为 False
-            app.run(host='0.0.0.0', port=app.config['port'], debug=True)
+            # 检查是否在Docker容器中运行
+            is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+            debug_mode = not is_docker  # 在Docker中关闭debug模式
+            app.run(host='0.0.0.0', port=app.config['port'], debug=debug_mode)
         finally:
             executor.shutdown()
