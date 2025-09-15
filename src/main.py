@@ -27,7 +27,7 @@ from providers.ehtranslator import EhTagTranslator
 # Flask 将从这个目录提供静态文件
 app = Flask(
     __name__,
-    static_folder='webui/dist', # Vue.js 构建后的完整目录（包含index.html和assets）
+    static_folder='../webui/dist', # Vue.js 构建后的完整目录（包含index.html和assets）
     static_url_path='/' # 静态文件URL前缀改为根路径
 )
 CORS(app) # 在 Flask 应用中启用 CORS
@@ -991,7 +991,7 @@ def serve_vue_app(path):
             return app.send_static_file(path)
 
         # 对于其他所有请求，返回index.html（SPA路由）
-        static_dir = app.static_folder or 'webui/dist'
+        static_dir = app.static_folder or '../webui/dist'
         index_path = os.path.join(static_dir, 'index.html')
         if not os.path.exists(index_path):
             return "Vue.js application not built. Please run 'npm run build' in the webui directory.", 500
