@@ -14,13 +14,12 @@ ad_file_pattern = re.compile(
     r'('
     r'^zzz.*\.(jpg|png|webp)$|'        # 以 zzz 开头的图片
     r'^YZv5\.0\.png$|'                 # 固定文件名
-    r'脸肿汉化组招募|'                 # 脸肿
     r'.*_ZZZZ0.*\..*$|'                # _ZZZZ0
     r'.*_ZZZZ1.*\..*$|'                # _ZZZZ1
     r'.*_zzz.*\..*$|'                  # 任意 _zzz
+    r'脸肿汉化组招募|'                 # 脸肿汉化组招募
     r'無邪気漢化組招募圖_ver.*\.png$|' # 無邪気汉化组招募图
-    r'無邪気無修宇宙分組_ver.*\.png$|' # 無邪気无修宇宙分组
-    r'^_.+\.jpg$'                      # 以 _ 开头的 jpg
+    r'無邪気無修宇宙分組_ver.*\.png$'  # 無邪気无修宇宙分组
     r')',
     re.IGNORECASE
 )
@@ -30,7 +29,7 @@ def make_comicinfo_xml(metadata):
         dicttoxml.dicttoxml(metadata, custom_root='ComicInfo', attr_type=False)
     ).toprettyxml(indent="  ", encoding="UTF-8")
 
-def write_xml_to_zip(file_path, mapped_file_path, metadata, app=None, logger=None):
+def write_xml_to_zip(file_path, metadata, app=None, logger=None):
     zip_file_root = os.path.dirname(file_path)
     zip_file_name = os.path.basename(file_path)
     copy = app and app.config.get('keep_original_file', False)
@@ -192,12 +191,5 @@ def write_xml_to_zip(file_path, mapped_file_path, metadata, app=None, logger=Non
     new_file_path = os.path.splitext(file_path)[0] + ".cbz"
     shutil.move(target_zip_path, new_file_path)
 
-    # 移动到映射目录
-    mapped_file_path = os.path.splitext(mapped_file_path)[0] + '.cbz'
-    if mapped_file_path != new_file_path:
-        os.makedirs(os.path.dirname(mapped_file_path), exist_ok=True)
-        shutil.move(new_file_path, mapped_file_path)
-        (logger.info if logger else print)(f"文件移动到映射目录: {mapped_file_path}")
-        return mapped_file_path
-
     return new_file_path
+

@@ -57,6 +57,10 @@ class TaskInfo:
         self.speed = 0  # 下载速度 B/s
         self.cancelled = False  # 取消标志
 
+class SafeDict(dict):
+    def __missing__(self, key):
+        return '{' + key + '}'
+
 # 日志初始化
 LOG_FILE = "./data/app.log"
 
@@ -181,13 +185,12 @@ def check_config():
     # Komga API 设置
     komga_config = config_data.get('komga', {})
     komga_enable = str(komga_config.get('enable', 'false')).lower() in TRUE_VALUES
+    app.config['komga_oneshot'] = str(komga_config.get('oneshot', '_oneshot'))
 
     if komga_enable:
         global_logger.info("开始测试 Komga API 的连接")
         app.config['komga_server'] = str(komga_config.get('server', '')).rstrip('/')
         app.config['komga_token'] = str(komga_config.get('token', ''))
-        app.config['komga_library_dir'] = str(komga_config.get('library_dir', ''))
-        app.config['komga_oneshot'] = str(komga_config.get('oneshot', '_oneshot'))
         app.config['komga_library_id'] = str(komga_config.get('library_id', ''))
 
         kmg = komga.KomgaAPI(server=app.config['komga_server'], token=app.config['komga_token'], logger=global_logger)
@@ -490,38 +493,37 @@ def post_download_processing(dl, gmetadata, task_id, logger=None, is_nhentai=Fal
         # 创建 ComicInfo.xml 并转换为 CBZ
         metadata = parse_gmetadata(gmetadata)
         if metadata.get('Writer') or metadata.get('Tags'):
-            ml = os.path.join(app.config['move_path'], os.path.basename(dl)) if app.config['move_path'] else dl
-            cbz = nfotool.write_xml_to_zip(dl, ml, metadata, app=app, logger=logger)
+            author = metadata.get('Penciller') or metadata.get('Writer') or 'Other'
+            writer = metadata.get('Writer') or metadata.get('Penciller') or 'Other'
+            series = metadata.get('AlternateSeries') or app.config['komga_oneshot']
+            move_path = app.config.get('move_path') or os.path.dirname(dl)
+            move_file_path = move_path.format(**SafeDict({
+                'author': author,
+                'penciller': author,
+                'writer': writer,
+                'series': series,
+                'filename': os.path.basename(dl)
+                })
+            )
+            if not os.path.basename(move_file_path).lower().endswith(('.zip', '.cbz')):
+                move_file_path = os.path.join(move_file_path, os.path.basename(dl))
+            cbz = nfotool.write_xml_to_zip(dl, metadata, app=app, logger=logger)
             if cbz and is_valid_zip(cbz):
-                dl = cbz
+                # 移动到指定目录（komga/lanraragi，可选）
+                move_file_path = os.path.splitext(move_file_path)[0] + '.cbz'
+                os.makedirs(os.path.dirname(move_file_path), exist_ok=True)
+                shutil.move(cbz, move_file_path)
+                (logger.info if logger else print)(f"文件移动到指定目录: {move_file_path}")
+                dl = move_file_path
             else:
                 return None
 
         # 检查是否被取消
         check_task_cancelled(task_id)
 
-        # 将文件移动到 Komga 媒体库
+        # 触发 Komga 媒体库入库扫描
         if app.config['komga_toggle'] and is_valid_zip(dl):
-            if app.config['komga_library_dir']:
-                library_path = app.config['komga_library_dir']
-
-                if is_nhentai:
-                    # 对于 nhentai，使用艺术家作为目录
-                    artist = metadata.get('Writer', 'Unknown Artist')
-                    series = app.config['komga_oneshot']
-                    destination = os.path.join(library_path, artist, series)
-                else:
-                    # 对于 ehentai，根据系列标签决定目录结构
-                    if 'Series' in metadata:
-                        series = metadata['Series']
-                    else:
-                        series = app.config['komga_oneshot']
-                    destination = os.path.join(library_path, metadata['Penciller'], series)
-
-                if logger: logger.info(f"开始移动到 Komga: {dl} ==> {destination}")
-                result = shutil.move(dl, check_dirs(destination))
-                if logger: logger.info("移动完毕")
-
+            if app.config['komga_library_id']:
                 kmg = komga.KomgaAPI(server=app.config['komga_server'], token=app.config['komga_token'], logger=logger)
                 if app.config['komga_library_id']:
                     kmg.scan_library(app.config['komga_library_id'])
