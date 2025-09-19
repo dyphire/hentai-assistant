@@ -1,6 +1,7 @@
 import re, os, json
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 from utils import check_dirs
 
@@ -268,3 +269,313 @@ class EHentaiTools:
                 except Exception as e:
                     # 如果发生了特定类型的异常，执行这里的代码
                     if self.logger: self.logger.info(f"An error occurred: {e}")
+
+    def get_favorites(self, favcat=0, max_pages=None):
+        """
+        获取收藏夹内容，按收藏时间排序
+        :param favcat: 收藏夹分类 (0-9)
+        :param max_pages: 最大页数，None表示获取所有
+        :return: 收藏夹列表，每个项目包含gid, token, title, added_time等
+        """
+        favorites = []
+        page = 0
+
+        while True:
+            # 优先使用ExHentai，如果不可用则使用E-Hentai
+            eh_valid, exh_valid = self.is_valid_cookie()
+            if exh_valid:
+                # 尝试不同的URL格式
+                urls_to_try = [
+                    f"https://exhentai.org/favorites.php?favcat={favcat}&inline_set=dm_l&page={page}",
+                    f"https://exhentai.org/favorites.php?favcat={favcat}&inline_set=dm_m&page={page}",
+                    f"https://exhentai.org/favorites.php?favcat={favcat}&page={page}",
+                ]
+            else:
+                urls_to_try = [
+                    f"https://e-hentai.org/favorites.php?favcat={favcat}&inline_set=dm_l&page={page}",
+                    f"https://e-hentai.org/favorites.php?favcat={favcat}&inline_set=dm_m&page={page}",
+                    f"https://e-hentai.org/favorites.php?favcat={favcat}&page={page}",
+                ]
+
+            response = None
+            final_url = None
+
+            for url in urls_to_try:
+                try:
+                    response = self.session.get(url, timeout=30)
+                    final_url = response.url or url  # 获取重定向后的URL，如果为None则使用原始URL
+                    if response.status_code == 200:
+                        break
+                except Exception as e:
+                    continue
+
+            if not response or response.status_code != 200:
+                if self.logger:
+                    self.logger.error("所有URL尝试都失败了")
+                break
+
+            url = final_url  # 使用最终的URL
+
+            try:
+                response = self.session.get(url, timeout=30)
+                if response.status_code != 200:
+                    if self.logger:
+                        self.logger.error(f"获取收藏夹页面失败: {response.status_code}")
+                    break
+
+                soup = BeautifulSoup(response.text, 'html.parser')
+
+                # 检查是否还有内容 - 使用表格结构
+                table = soup.find('table', class_='itg')
+                if not table:
+                    if self.logger:
+                        self.logger.info(f"第{page}页没有找到画廊表格，可能已到最后一页")
+                    break
+
+                # 获取表格中的所有行（跳过表头）
+                rows = table.find_all('tr')[1:]  # 跳过表头行
+                if not rows:
+                    if self.logger:
+                        self.logger.info(f"第{page}页没有找到画廊行")
+                    break
+
+                for row in rows:
+                    try:
+                        # 获取行中的所有单元格
+                        cells = row.find_all('td')
+                        if len(cells) < 4:
+                            continue
+
+                        # 第三个单元格包含标题和链接
+                        title_cell = cells[2]  # 标题单元格
+                        link = title_cell.find('a')
+                        if not link:
+                            continue
+
+                        href = link.get('href', '')
+                        match = re.search(r'/g/(\d+)/([a-z0-9]+)/?', href)
+                        if not match:
+                            continue
+
+                        gid = int(match.group(1))
+                        token = match.group(2)
+
+                        # 提取标题
+                        title = link.find('div', class_='glink')
+                        if title:
+                            title = title.text.strip()
+                        else:
+                            title = link.text.strip()
+
+                        # 第四个单元格包含收藏时间
+                        time_cell = cells[3]  # 时间单元格
+                        added_time = None
+                        time_text = time_cell.text.strip()
+                        if time_text:
+                            try:
+                                # 解析格式如 "2025-09-15 19:34"
+                                added_time = datetime.strptime(time_text, "%Y-%m-%d %H:%M")
+                            except ValueError:
+                                try:
+                                    # 尝试处理没有冒号的格式，如 "2025-09-1519:34"
+                                    if len(time_text) == 16 and time_text[10] != ' ':
+                                        time_text = time_text[:10] + ' ' + time_text[10:12] + ':' + time_text[12:]
+                                        added_time = datetime.strptime(time_text, "%Y-%m-%d %H:%M")
+                                except ValueError:
+                                    pass
+
+                        # 第二个单元格包含缩略图
+                        image_cell = cells[1]  # 图片单元格
+                        img = image_cell.find('img')
+                        if img:
+                            # 优先使用data-src属性（真正的图片URL），如果没有则使用src属性
+                            thumbnail = img.get('data-src') or img.get('src', '')
+                        else:
+                            thumbnail = ''
+
+                        # 提取标签
+                        tags = []
+                        tag_divs = title_cell.find_all('div', class_='gt')
+                        for tag_div in tag_divs:
+                            tag_text = tag_div.text.strip()
+                            if tag_text:
+                                tags.append(tag_text)
+
+                        gallery_info = {
+                            'gid': gid,
+                            'token': token,
+                            'title': title,
+                            'added_time': added_time.isoformat() if added_time else None,
+                            'thumbnail': thumbnail,
+                            'tags': tags,
+                            'url': f"https://e-hentai.org/g/{gid}/{token}/"
+                        }
+
+                        favorites.append(gallery_info)
+
+                    except Exception as e:
+                        continue
+
+                page += 1
+                if max_pages and page >= max_pages:
+                    break
+
+                # 检查是否有下一页
+                next_page_link = soup.find('a', string='>')
+                if not next_page_link:
+                    break
+
+            except Exception as e:
+                if self.logger:
+                    self.logger.error(f"获取收藏夹页面失败: {e}")
+                break
+
+        # 按收藏时间排序（最新的在前）
+        favorites.sort(key=lambda x: x['added_time'] or '', reverse=True)
+
+        if self.logger:
+            self.logger.info(f"获取到 {len(favorites)} 个收藏项")
+
+        return favorites
+
+    def _load_favorites_cache(self, favcat=0):
+        """加载收藏夹缓存"""
+        cache_path = check_dirs('data/ehentai/favorites/') + f'favcat_{favcat}.json'
+        if os.path.exists(cache_path):
+            try:
+                with open(cache_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except Exception as e:
+                if self.logger:
+                    self.logger.warning(f"加载收藏夹缓存失败: {e}")
+        return {'favorites': [], 'last_update': None}
+
+    def _save_favorites_cache(self, favorites, favcat=0):
+        """保存收藏夹缓存"""
+        cache_path = check_dirs('data/ehentai/favorites/') + f'favcat_{favcat}.json'
+        cache_data = {
+            'favorites': favorites,
+            'last_update': datetime.now().isoformat()
+        }
+        try:
+            with open(cache_path, 'w', encoding='utf-8') as f:
+                json.dump(cache_data, f, ensure_ascii=False, indent=2)
+            if self.logger:
+                self.logger.info(f"保存收藏夹缓存: {len(favorites)} 项")
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"保存收藏夹缓存失败: {e}")
+
+    def update_favorites_incremental(self, favcat=0, max_pages=None):
+        """
+        增量更新收藏夹，只获取新的收藏项
+        :param favcat: 收藏夹分类 (0-9)
+        :param max_pages: 最大页数，None表示获取所有
+        :return: 新增的收藏项列表
+        """
+        # 加载现有缓存
+        cache = self._load_favorites_cache(favcat)
+        existing_favorites = cache['favorites']
+        last_update = cache['last_update']
+
+        if self.logger:
+            self.logger.info(f"加载现有收藏夹缓存: {len(existing_favorites)} 项")
+
+        # 获取所有收藏夹（或指定页数）
+        all_favorites = self.get_favorites(favcat, max_pages)
+
+        # 找出新增的收藏项
+        existing_gids = {fav['gid'] for fav in existing_favorites}
+        new_favorites = []
+
+        for fav in all_favorites:
+            if fav['gid'] not in existing_gids:
+                new_favorites.append(fav)
+                existing_favorites.append(fav)
+            else:
+                # 更新现有项的时间等信息
+                for i, existing in enumerate(existing_favorites):
+                    if existing['gid'] == fav['gid']:
+                        existing_favorites[i] = fav
+                        break
+
+        # 按收藏时间排序
+        existing_favorites.sort(key=lambda x: x.get('added_time') or '', reverse=True)
+
+        # 保存更新后的缓存
+        self._save_favorites_cache(existing_favorites, favcat)
+
+        if self.logger:
+            self.logger.info(f"增量更新完成，新增 {len(new_favorites)} 项收藏")
+
+        return new_favorites
+
+    def get_favcat_names(self):
+        """
+        获取收藏夹分类名称
+        :return: 收藏夹名称列表
+        """
+        # 优先使用ExHentai，如果不可用则使用E-Hentai
+        eh_valid, exh_valid = self.is_valid_cookie()
+        if exh_valid:
+            url = "https://exhentai.org/favorites.php"
+        else:
+            url = "https://e-hentai.org/favorites.php"
+
+        try:
+            response = self.session.get(url, timeout=30)
+            if response.status_code != 200:
+                # 如果获取失败，返回默认名称
+                return [
+                    'Favorite 0', 'Favorite 1', 'Favorite 2', 'Favorite 3', 'Favorite 4',
+                    'Favorite 5', 'Favorite 6', 'Favorite 7', 'Favorite 8', 'Favorite 9'
+                ]
+
+            soup = BeautifulSoup(response.text, 'html.parser')
+
+            # 查找收藏夹分类div
+            favcat_divs = soup.find_all('div', class_='fp')
+
+            favcat_names = []
+            for div in favcat_divs:
+                # 获取收藏夹名称 - 尝试多种方式
+                name_div = None
+
+                # 方法1: 查找title属性
+                if div.get('title'):
+                    name_div = div.get('title')
+                else:
+                    # 方法2: 查找内部div的title属性
+                    inner_div = div.find('div', class_='i')
+                    if inner_div and inner_div.get('title'):
+                        name_div = inner_div.get('title')
+                    else:
+                        # 方法3: 查找文本内容
+                        text_divs = div.find_all('div')
+                        for td in text_divs:
+                            if td.text.strip() and not td.text.strip().isdigit():
+                                name_div = td.text.strip()
+                                break
+
+                if name_div:
+                    favcat_names.append(name_div)
+
+            # 如果获取到的名称不够10个，用默认名称填充
+            default_names = [
+                'Favorite 0', 'Favorite 1', 'Favorite 2', 'Favorite 3', 'Favorite 4',
+                'Favorite 5', 'Favorite 6', 'Favorite 7', 'Favorite 8', 'Favorite 9'
+            ]
+
+            while len(favcat_names) < 10:
+                favcat_names.append(default_names[len(favcat_names)])
+
+            return favcat_names[:10]  # 只返回前10个
+
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"获取收藏夹名称失败: {e}")
+            # 返回默认名称
+            return [
+                'Favorite 0', 'Favorite 1', 'Favorite 2', 'Favorite 3', 'Favorite 4',
+                'Favorite 5', 'Favorite 6', 'Favorite 7', 'Favorite 8', 'Favorite 9'
+            ]
