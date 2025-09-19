@@ -33,38 +33,34 @@ docker run -d \
 ### 本地开发运行
 
 1. **克隆项目**
-   
+
    ```bash
    git clone https://github.com/<your-username>/hentai-assistant.git
    cd hentai-assistant
    ```
-
 2. **安装Python依赖**
-   
+
    ```bash
    pip install -r requirements.txt
    ```
-
 3. **安装前端依赖**
-   
+
    ```bash
    cd webui
    npm install
    ```
-
 4. **启动开发服务器**
-   
+
    ```bash
    # 终端1: 启动后端
    python src/main.py
-   
+
    # 终端2: 启动前端开发服务器
    cd webui
    npm run dev
    ```
-
 5. **访问开发环境**
-   
+
    - 后端API: `http://localhost:5001`
    - 前端界面: `http://localhost:5173`
 
@@ -102,8 +98,13 @@ docker run -d \
 ```ini
 [general]
 port=5001
-download_torrent=false
-tags_translation=true
+download_torrent=true
+keep_torrents=false
+keep_original_file=false
+tags_translation=false
+prefer_japanese_title=true
+remove_ads=false
+move_path=your_path/{author}/{series}/{filename}
 
 [ehentai]
 cookie="ipb_member_id=1234567; ipb_pass_hash=abcdef123456;"
@@ -115,6 +116,15 @@ cookie=""
 enable=false
 server=http://localhost:6800/jsonrpc
 token=your_aria2_rpc_secret
+download_dir=
+mapped_dir=
+
+[komga]
+enable=false
+server=http://10.0.0.3:25600
+token=
+library_id=
+oneshot=_oneshot
 ```
 
 ## API接口
@@ -141,7 +151,6 @@ GET /api/download?url=<gallery_url>&mode=<download_mode>
 
 - `GET /api/config`: 获取当前配置
 - `POST /api/config`: 更新配置
-
 
 ## 使用指南
 
@@ -183,17 +192,15 @@ done
 ### 常见问题
 
 1. **Cookie无效**
-   
+
    - 检查E-Hentai Cookie是否过期
    - 确认可以正常访问exhentai
-
 2. **下载失败**
-   
+
    - 检查网络连接
    - 确认H@H权限
-
 3. **Aria2连接失败**
-   
+
    - 检查Aria2服务是否运行
    - 确认RPC密钥正确
 
