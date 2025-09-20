@@ -1,4 +1,4 @@
-import os, configparser, re, shutil, sqlite3
+import os, re, shutil, sqlite3
 import json, html
 from datetime import datetime, timezone
 
@@ -19,6 +19,7 @@ from providers import nhentai
 from utils import check_dirs, is_valid_zip, parse_filename
 import nfotool
 from database import task_db
+from config import load_config, save_config
 
 from providers.ehtranslator import EhTagTranslator
 
@@ -31,11 +32,13 @@ app = Flask(
     static_url_path='/' # 静态文件URL前缀改为根路径
 )
 CORS(app) # 在 Flask 应用中启用 CORS
-# 设置5001端口为默认端口
-app.config['port'] = 5001
+# 过滤掉 /api/task_stats 的访问日志
+class StatsFilter(logging.Filter):
+    def filter(self, record):
+        return 'GET /api/task_stats' not in record.getMessage()
 
-config_path = './data/config.ini'  # 使用INI配置
-config_parser = configparser.ConfigParser()
+logging.getLogger('werkzeug').addFilter(StatsFilter())
+# 设置5001端口为默认端口
 
 # 创建一个线程池用于并发处理任务
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=5)
@@ -85,53 +88,38 @@ global_logger = init_global_logger()
 
 def get_task_logger(task_id):
     log_buffer = StringIO()
-    buffer_handler = logging.StreamHandler(log_buffer)
-    formatter = logging.Formatter(f'%(asctime)s [%(levelname)s] [task:{task_id}] %(message)s')
-    buffer_handler.setFormatter(formatter)
-
     logger = logging.getLogger(f"task_{task_id}")
     logger.setLevel(logging.INFO)
-    # 避免重复添加 handler
-    if not any(isinstance(h, logging.StreamHandler) and getattr(h, 'stream', None) == log_buffer for h in logger.handlers):
-        logger.addHandler(buffer_handler)
-    # 添加全局日志（带 taskid 前缀）
-    class TaskIdFilter(logging.Filter):
-        def filter(self, record):
-            record.msg = f"[task:{task_id}] {record.msg}"
-            return True
-    for h in global_logger.handlers:
-        if not any(isinstance(f, TaskIdFilter) for f in h.filters):
-            h.addFilter(TaskIdFilter())
+
+    # 清除旧的 handlers，以防重试任务时重复添加
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    formatter = logging.Formatter(f'%(asctime)s [%(levelname)s] [task:{task_id}] %(message)s')
+
+    # Handler 1: 写入内存缓冲区 (用于 API)
+    buffer_handler = logging.StreamHandler(log_buffer)
+    buffer_handler.setFormatter(formatter)
+    logger.addHandler(buffer_handler)
+
+    # Handler 2: 写入终端 (用于 Docker logs)
+    console_handler = logging.StreamHandler()  # 默认输出到 sys.stderr
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
+    # 阻止日志向上传播到 root logger，避免 werkzeug 环境下重复输出
+    logger.propagate = False
+
     return logger, log_buffer
 
-def load_config():
-    config_data = {}
-    if os.path.exists(config_path):
-        try:
-            config_parser.read(config_path, encoding='utf-8')
-            # 转换INI格式到字典格式
-            for section in config_parser.sections():
-                config_data[section] = {}
-                for key, value in config_parser[section].items():
-                    # 去除首尾引号
-                    if value.startswith('"') and value.endswith('"'):
-                        config_data[section][key] = value[1:-1]
-                    else:
-                        config_data[section][key] = value
-            global_logger.info("使用INI配置文件")
-        except Exception as e:
-            global_logger.error(f"加载INI配置失败: {e}")
-            config_data = {}
-    else:
-        global_logger.warning("未找到配置文件，使用默认配置")
-    return config_data
 
 def check_config():
     TRUE_VALUES = {'true', 'enable', '1', 'yes', 'on'}
     config_data = load_config()
-
+    
     # 通用设置
     general = config_data.get('general', {})
+    app.config['port'] = int(general.get('port', 5001))
     app.config['download_torrent'] = str(general.get('download_torrent', 'false')).lower() in TRUE_VALUES
     app.config['keep_torrents'] = str(general.get('keep_torrents', 'false')).lower() in TRUE_VALUES
     app.config['keep_original_file'] = str(general.get('keep_original_file', 'false')).lower() in TRUE_VALUES
@@ -773,26 +761,8 @@ def update_config():
     if not data:
         return json_response({'error': 'Invalid JSON data'}), 400
 
-    # 移除状态信息
-    config_data = {k: v for k, v in data.items() if k != 'status'}
-
-    # 保存为INI格式
     try:
-        with open(config_path, 'w', encoding='utf-8') as f:
-            # 手动写入配置以控制格式，确保等号两侧没有空格
-            section_count = 0
-            for section_name, section_data in config_data.items():
-                # 在非第一个section前添加空行
-                if section_count > 0:
-                    f.write('\n')
-                f.write(f'[{section_name}]\n')
-                for key, value in section_data.items():
-                    # 如果值包含特殊字符，添加引号
-                    if isinstance(value, str) and (' ' in value or any(c in value for c in ['#', ';', '='])):
-                        f.write(f'{key}="{value}"\n')
-                    else:
-                        f.write(f'{key}={value}\n')
-                section_count += 1
+        save_config(data)
     except Exception as e:
         return json_response({'error': f'Failed to save config: {e}'}), 500
 
@@ -1000,53 +970,41 @@ def serve_vue_app(path):
         return send_from_directory(static_dir, 'index.html')
 
 if __name__ == '__main__':
-    # 检查配置文件是否存在，如果不存在则创建示例配置
-    config_path = './data/config.ini'
-    ini_example_path = './data/config.ini.example'
+    # 初始化时加载配置，config.py 会自动处理文件创建
+    check_config()
 
-    if not os.path.exists(config_path):
-        if os.path.exists(ini_example_path):
-            shutil.copy(ini_example_path, config_path)
-            global_logger.info("已创建INI配置文件示例，请修改 config.ini")
+    # 启动时迁移内存中的任务到数据库
+    if tasks:
+        global_logger.info("正在迁移内存中的任务到数据库...")
+        success = task_db.migrate_memory_tasks(tasks)
+        if success:
+            global_logger.info("任务迁移完成")
         else:
-            global_logger.error("配置文件不存在，且未找到配置文件示例，请手动创建配置文件。")
-            exit(1)
-    else:
-        check_config()
+            global_logger.error("任务迁移失败")
 
-
-        # 启动时迁移内存中的任务到数据库
-        if tasks:
-            global_logger.info("正在迁移内存中的任务到数据库...")
-            success = task_db.migrate_memory_tasks(tasks)
-            if success:
-                global_logger.info("任务迁移完成")
+    # 将重启前的进行中任务标记为失败
+    global_logger.info("正在检查并标记重启前的进行中任务...")
+    try:
+        with sqlite3.connect('./data/tasks.db') as conn:
+            cursor = conn.execute('SELECT id FROM tasks WHERE status = ?', ('进行中',))
+            in_progress_tasks = cursor.fetchall()
+            if in_progress_tasks:
+                for task_row in in_progress_tasks:
+                    task_id = task_row[0]
+                    conn.execute('UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?',
+                               ('错误', '任务因应用重启而中断', datetime.now(timezone.utc).isoformat(), task_id))
+                conn.commit()
+                global_logger.info(f"已将 {len(in_progress_tasks)} 个进行中任务标记为失败")
             else:
-                global_logger.error("任务迁移失败")
+                global_logger.info("没有发现进行中的任务")
+    except sqlite3.Error as e:
+        global_logger.error(f"标记进行中任务失败时发生数据库错误: {e}")
 
-        # 将重启前的进行中任务标记为失败
-        global_logger.info("正在检查并标记重启前的进行中任务...")
-        try:
-            with sqlite3.connect('./data/tasks.db') as conn:
-                cursor = conn.execute('SELECT id FROM tasks WHERE status = ?', ('进行中',))
-                in_progress_tasks = cursor.fetchall()
-                if in_progress_tasks:
-                    for task_row in in_progress_tasks:
-                        task_id = task_row[0]
-                        conn.execute('UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?',
-                                   ('错误', '任务因应用重启而中断', datetime.now(timezone.utc).isoformat(), task_id))
-                    conn.commit()
-                    global_logger.info(f"已将 {len(in_progress_tasks)} 个进行中任务标记为失败")
-                else:
-                    global_logger.info("没有发现进行中的任务")
-        except sqlite3.Error as e:
-            global_logger.error(f"标记进行中任务失败时发生数据库错误: {e}")
-
-        try:
-            # 在生产模式下，debug 应该设置为 False
-            # 检查是否在Docker容器中运行
-            is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
-            debug_mode = not is_docker  # 在Docker中关闭debug模式
-            app.run(host='0.0.0.0', port=app.config['port'], debug=debug_mode)
-        finally:
-            executor.shutdown()
+    try:
+        # 在生产模式下，debug 应该设置为 False
+        # 检查是否在Docker容器中运行
+        is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+        debug_mode = not is_docker  # 在Docker中关闭debug模式
+        app.run(host='0.0.0.0', port=app.config['port'], debug=debug_mode)
+    finally:
+        executor.shutdown()

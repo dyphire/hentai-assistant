@@ -124,7 +124,9 @@ const saveConfig = async () => {
     await axios.post(`${API_BASE_URL}/config`, configToSave);
     saveSuccess.value = true;
     // 重新加载配置以获取最新的状态
-    setTimeout(fetchConfig, 3000); // 等待后端检查配置完成
+    setTimeout(() => {
+      location.reload();
+    }, 1000); // 延迟1秒后刷新页面
   } catch (err) {
     saveError.value = '保存配置失败。';
     console.error(err);
