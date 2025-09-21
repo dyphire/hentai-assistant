@@ -3,12 +3,14 @@ import threading
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
+from utils import TaskStatus
+
 class TaskDatabase:
     STATUS_MAP = {
-        "in-progress": "进行中",
-        "completed": "完成",
-        "cancelled": "取消",
-        "failed": "错误",
+        "in-progress": TaskStatus.IN_PROGRESS,
+        "completed": TaskStatus.COMPLETED,
+        "cancelled": TaskStatus.CANCELLED,
+        "failed": TaskStatus.ERROR,
     }
 
     def __init__(self, db_path: str = './data/tasks.db'):
@@ -53,7 +55,7 @@ class TaskDatabase:
 
             conn.commit()
 
-    def add_task(self, task_id: str, status: str = "进行中",
+    def add_task(self, task_id: str, status: str = TaskStatus.IN_PROGRESS,
                  filename: Optional[str] = None, error: Optional[str] = None,
                  url: Optional[str] = None, mode: Optional[str] = None) -> bool:
         """添加新任务"""
@@ -186,7 +188,7 @@ class TaskDatabase:
                 with self._get_conn() as conn:
                     if status == 'all_except_in_progress':
                         # 清除除了进行中任务外的所有任务
-                        conn.execute('DELETE FROM tasks WHERE status != ?', ('进行中',))
+                        conn.execute('DELETE FROM tasks WHERE status != ?', (TaskStatus.IN_PROGRESS,))
                     else:
                         # 将前端状态映射为数据库状态
                         status_cn = self.STATUS_MAP.get(status, status)

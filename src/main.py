@@ -16,8 +16,8 @@ from providers import komga
 from providers import aria2
 from providers import ehentai
 from providers import nhentai
-from utils import check_dirs, is_valid_zip, parse_filename
-import nfotool
+from utils import check_dirs, is_valid_zip, parse_filename, TaskStatus
+import cbztool
 from database import task_db
 from config import load_config, save_config
 
@@ -51,7 +51,7 @@ class TaskInfo:
         self.future = future
         self.logger = logger
         self.log_buffer = log_buffer
-        self.status = "进行中"  # "完成"、"取消"、"错误"
+        self.status = TaskStatus.IN_PROGRESS  # "完成"、"取消"、"错误"
         self.error = None
         self.filename = None # 初始 filename 为 None
         self.progress = 0  # 进度百分比 0-100
@@ -123,10 +123,13 @@ def check_config():
     app.config['download_torrent'] = str(general.get('download_torrent', 'false')).lower() in TRUE_VALUES
     app.config['keep_torrents'] = str(general.get('keep_torrents', 'false')).lower() in TRUE_VALUES
     app.config['keep_original_file'] = str(general.get('keep_original_file', 'false')).lower() in TRUE_VALUES
-    app.config['tags_translation'] = str(general.get('tags_translation', 'false')).lower() in TRUE_VALUES
-    app.config['prefer_japanese_title'] = str(general.get('prefer_japanese_title', 'true')).lower() in TRUE_VALUES
-    app.config['remove_ads'] = str(general.get('remove_ads', 'true')).lower() in TRUE_VALUES
     app.config['move_path'] = str(general.get('move_path', '')).rstrip('/') or None
+    
+    advanced = config_data.get('advanced', {})
+    app.config['tags_translation'] = str(advanced.get('tags_translation', 'false')).lower() in TRUE_VALUES
+    app.config['prefer_japanese_title'] = str(advanced.get('prefer_japanese_title', 'true')).lower() in TRUE_VALUES
+    app.config['remove_ads'] = str(advanced.get('remove_ads', 'true')).lower() in TRUE_VALUES
+    app.config['ehentai_genre'] = str(advanced.get('ehentai_genre', 'false')).lower() in TRUE_VALUES
 
     # E-Hentai 设置
     ehentai_config = config_data.get('ehentai', {})
@@ -285,7 +288,7 @@ def extract_before_chapter(filename, matched=False):
         # 6. 罗马数字
         r'(.*?)([IVXLCDM]+)\b',
         # 7. 上中下前后
-        r'(.*?)[\s\-—~⁓～]+[上中下前后後]',
+        r'^(.*?)(?:[上中下前后後]$|[上中下前后後]編)$',
         # 8. 纯数字
         r'(.*?)\s*\d+'
     ]
@@ -316,7 +319,7 @@ def fill_field(comicinfo, field, tags, prefixes):
             comicinfo[field] = ", ".join(values)
             return
 
-def add_tag_first(comicinfo, new_tag: str):
+def add_tag_to_front(comicinfo, new_tag: str):
     new_tag = new_tag.strip().lower()
     if not new_tag:
         return
@@ -329,7 +332,7 @@ def add_tag_first(comicinfo, new_tag: str):
         comicinfo['Tags'] = new_tag
 
 def parse_eh_tags(tags):
-    comicinfo = {'Genre':'Hentai', 'AgeRating':'R18+'}
+    comicinfo = {'AgeRating':'R18+'}
     #char_list = []
     tag_list = []
     collectionlist = []
@@ -344,17 +347,6 @@ def parse_eh_tags(tags):
                     language_code = langcodes.find(tag_name).language
                     if language_code:
                         comicinfo['LanguageISO'] = language_code # 转换为BCP-47
-            elif namespace == 'parody':
-                # 提取 parody 内容至 SeriesGroup
-                if tag_name not in ['original', 'various']:
-                    kanji_parody = ehentai.get_original_tag(tag_name) # 将提取到合集的 Tag 翻译为日文
-                    tag_name = eh_translator.get_translation(tag_name, namespace)
-                    tag_list.append(f"{namespace}:{tag_name}") #  此处保留 namespace，方便所有 parody 相关的 tag 能排序在一块
-                    if not kanji_parody == None and not app.config.get('tags_translation', True):
-                        comicinfo['Genre'] = comicinfo['Genre'] + ', Parody'
-                        collectionlist.append(kanji_parody)
-                    else:
-                        collectionlist.append(tag_name)
             elif namespace in ['character']:
                 tag_name = eh_translator.get_translation(tag_name, namespace)
                 tag_list.append(f"{namespace}:{tag_name}") # 保留 namespace，理由同 parody
@@ -397,14 +389,19 @@ def parse_gmetadata(data):
         )
     if 'tags' in data:
         comicinfo.update(parse_eh_tags(data['tags']))
-    # 把过滤的 category 添加到 Tags，主要用途在于把 doujinshi 作为标签，方便在商业作中筛选
+    # 根据 ehentai_genre 设置决定是否将 Categories 作为 Genre 还是作为 Tag 使用
+    if not data['category'].lower() == 'non-h':
+        comicinfo['Genre'] = 'Hentai'
     if data['category'].lower() not in ['manga', 'misc', 'asianporn', 'private']:
         category = eh_translator.get_translation(data['category'], 'reclass')
-        if 'Genre' in comicinfo:
-            comicinfo['Genre'] = comicinfo['Genre'] + ', ' + category
+        if app.config['ehentai_genre']:
+            if 'Genre' in comicinfo:
+                comicinfo['Genre'] = comicinfo['Genre'] + ', ' + category
+            else:
+                comicinfo['Genre'] = category
         else:
-            comicinfo['Genre'] = category
-        add_tag_first(comicinfo, category)
+            # 将 Categories 作为 Tags 至于最前方
+            add_tag_to_front(comicinfo, category)
     # 从标题中提取作者信息
     if app.config['prefer_japanese_title'] and not data['title_jpn'] == "":
         text = html.unescape(data['title_jpn'])
@@ -412,7 +409,7 @@ def parse_gmetadata(data):
         text = html.unescape(data['title'])
     comic_market = re.search(r'\(C(\d+)\)', text)
     if comic_market:
-       add_tag_first(comicinfo, f"c{comic_market.group(1)}")
+       add_tag_to_front(comicinfo, f"c{comic_market.group(1)}")
     if data['category'].lower() not in ['imageset']:
         if 'SeriesGroup' not in comicinfo:
             comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'], comicinfo['SeriesGroup'] = parse_filename(text, eh_translator)
@@ -458,17 +455,17 @@ def download_task(url, mode, task_id, logger=None):
             if logger: logger.info(f"Task {task_id} was cancelled by user")
             with tasks_lock:
                 if task_id in tasks:
-                    tasks[task_id].status = "取消"
+                    tasks[task_id].status = TaskStatus.CANCELLED
             # 更新数据库状态
-            task_db.update_task(task_id, status="取消")
+            task_db.update_task(task_id, status=TaskStatus.CANCELLED)
         else:
             if logger: logger.error(f"Task {task_id} failed with error: {e}")
             with tasks_lock:
                 if task_id in tasks:
-                    tasks[task_id].status = "错误"
+                    tasks[task_id].status = TaskStatus.ERROR
                     tasks[task_id].error = str(e)
             # 更新数据库状态
-            task_db.update_task(task_id, status="错误", error=str(e))
+            task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
 
 def post_download_processing(dl, gmetadata, task_id, logger=None, is_nhentai=False):
     try:
@@ -495,7 +492,7 @@ def post_download_processing(dl, gmetadata, task_id, logger=None, is_nhentai=Fal
             )
             if not os.path.basename(move_file_path).lower().endswith(('.zip', '.cbz')):
                 move_file_path = os.path.join(move_file_path, os.path.basename(dl))
-            cbz = nfotool.write_xml_to_zip(dl, metadata, app=app, logger=logger)
+            cbz = cbztool.write_xml_to_zip(dl, metadata, app=app, logger=logger)
             if cbz and is_valid_zip(cbz):
                 # 移动到指定目录（komga/lanraragi，可选）
                 move_file_path = os.path.splitext(move_file_path)[0] + '.cbz'
@@ -600,9 +597,9 @@ def download_gallery_task(url, mode, task_id, logger=None):
             if logger: logger.info(f"Task {task_id} completed successfully.")
             with tasks_lock:
                 if task_id in tasks:
-                    tasks[task_id].status = "完成"
+                    tasks[task_id].status = TaskStatus.COMPLETED
 
-            task_db.update_task(task_id, status="完成")
+            task_db.update_task(task_id, status=TaskStatus.COMPLETED)
             return True
         else:
             raise ValueError("Downloaded file is not a valid zip archive.")
@@ -611,9 +608,9 @@ def download_gallery_task(url, mode, task_id, logger=None):
         if logger: logger.error(f"Download failed: {e}")
         with tasks_lock:
             if task_id in tasks:
-                tasks[task_id].status = "错误"
+                tasks[task_id].status = TaskStatus.ERROR
                 tasks[task_id].error = str(e)
-        task_db.update_task(task_id, status="错误", error=str(e))
+        task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
         raise e
 
 @app.route('/api/download', methods=['GET'])
@@ -630,7 +627,7 @@ def download_url():
         tasks[task_id] = TaskInfo(future, logger, log_buffer)
 
     # 添加任务到数据库，包含URL和mode信息用于重试
-    task_db.add_task(task_id, status="进行中", url=url, mode=mode)
+    task_db.add_task(task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode)
 
     return json_response({'message': f"Download task for {url} started with task ID {task_id}.", 'task_id': task_id}), 202
 
@@ -647,9 +644,9 @@ def stop_task(task_id):
     cancelled = task.future.cancel()
     if cancelled:
         with tasks_lock:
-            task.status = "取消"
+            task.status = TaskStatus.CANCELLED
         # 更新数据库状态
-        task_db.update_task(task_id, status="取消")
+        task_db.update_task(task_id, status=TaskStatus.CANCELLED)
         return json_response({'message': 'Task cancelled'})
     else:
         return json_response({'message': 'Task could not be cancelled (可能已在运行或已完成)'})
@@ -662,7 +659,7 @@ def retry_task(task_id):
         return json_response({'error': 'Task not found'}), 404
 
     # 检查任务状态是否为失败
-    if task_info['status'] != '错误':
+    if task_info['status'] != TaskStatus.ERROR:
         return json_response({'error': 'Only failed tasks can be retried'}), 400
 
     # 检查是否有URL信息
@@ -677,7 +674,7 @@ def retry_task(task_id):
     new_task_id = datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')
 
     # 添加新任务到数据库
-    task_db.add_task(new_task_id, status="进行中", url=url, mode=mode)
+    task_db.add_task(new_task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode)
 
     # 删除原来的失败任务
     try:
@@ -828,10 +825,10 @@ def get_tasks():
 
             # 获取各个状态的总数
             all_count = sum(status_counts.values())
-            in_progress_count = status_counts.get('进行中', 0)
-            completed_count = status_counts.get('完成', 0)
-            cancelled_count = status_counts.get('取消', 0)
-            failed_count = status_counts.get('错误', 0)
+            in_progress_count = status_counts.get(TaskStatus.IN_PROGRESS, 0)
+            completed_count = status_counts.get(TaskStatus.COMPLETED, 0)
+            cancelled_count = status_counts.get(TaskStatus.CANCELLED, 0)
+            failed_count = status_counts.get(TaskStatus.ERROR, 0)
     except sqlite3.Error as e:
         print(f"Database error getting status counts: {e}")
         all_count = total
@@ -875,16 +872,16 @@ def get_task_stats():
             total_tasks = cursor.fetchone()['total']
 
             # 获取进行中任务数
-            in_progress = status_counts.get('进行中', 0)
+            in_progress = status_counts.get(TaskStatus.IN_PROGRESS, 0)
 
             # 获取已完成任务数
-            completed = status_counts.get('完成', 0)
+            completed = status_counts.get(TaskStatus.COMPLETED, 0)
 
             # 获取取消任务数
-            cancelled = status_counts.get('取消', 0)
+            cancelled = status_counts.get(TaskStatus.CANCELLED, 0)
 
             # 获取失败任务数（只包括错误）
-            failed = status_counts.get('错误', 0)
+            failed = status_counts.get(TaskStatus.ERROR, 0)
 
             return json_response({
                 'total': total_tasks,
@@ -918,19 +915,19 @@ def clear_tasks():
             
             if status_to_clear == "all_except_in_progress":
                 # 清除除了进行中任务外的所有任务
-                should_clear = task_info.status != "进行中"
+                should_clear = task_info.status != TaskStatus.IN_PROGRESS
             elif status_to_clear == "failed":
                 # 清除失败状态的任务（对应数据库中的"错误"状态）
-                should_clear = task_info.status == "错误"
+                should_clear = task_info.status == TaskStatus.ERROR
             elif status_to_clear == "completed":
                 # 清除已完成的任务
-                should_clear = task_info.status == "完成"
+                should_clear = task_info.status == TaskStatus.COMPLETED
             elif status_to_clear == "cancelled":
                 # 清除取消的任务
-                should_clear = task_info.status == "取消"
+                should_clear = task_info.status == TaskStatus.CANCELLED
             elif status_to_clear == "in-progress":
                 # 清除进行中的任务
-                should_clear = task_info.status == "进行中"
+                should_clear = task_info.status == TaskStatus.IN_PROGRESS
             else:
                 # 直接状态匹配
                 should_clear = task_info.status == status_to_clear
@@ -957,13 +954,12 @@ def serve_vue_app(path):
     if app.debug: # 如果是调试模式 (开发环境)
         return redirect(f"http://localhost:5173/{path}") # 重定向到 Vue 开发服务器
     else: # 如果是生产模式
-        # 检查是否是API请求或静态资源请求
-        if path.startswith('api/') or path.startswith('assets/'):
-            # 让Flask正常处理API和静态资源
-            return app.send_static_file(path)
-
-        # 对于其他所有请求，返回index.html（SPA路由）
-        static_dir = app.static_folder or '../webui/dist'
+        static_dir = app.static_folder
+        # 如果请求的路径在静态文件夹中存在，则提供该文件
+        if path and os.path.exists(os.path.join(static_dir, path)):
+            return send_from_directory(static_dir, path)
+        
+        # 否则，提供 index.html，让 Vue Router 处理路由
         index_path = os.path.join(static_dir, 'index.html')
         if not os.path.exists(index_path):
             return "Vue.js application not built. Please run 'npm run build' in the webui directory.", 500
@@ -986,13 +982,13 @@ if __name__ == '__main__':
     global_logger.info("正在检查并标记重启前的进行中任务...")
     try:
         with sqlite3.connect('./data/tasks.db') as conn:
-            cursor = conn.execute('SELECT id FROM tasks WHERE status = ?', ('进行中',))
+            cursor = conn.execute('SELECT id FROM tasks WHERE status = ?', (TaskStatus.IN_PROGRESS,))
             in_progress_tasks = cursor.fetchall()
             if in_progress_tasks:
                 for task_row in in_progress_tasks:
                     task_id = task_row[0]
                     conn.execute('UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?',
-                               ('错误', '任务因应用重启而中断', datetime.now(timezone.utc).isoformat(), task_id))
+                               (TaskStatus.ERROR, '任务因应用重启而中断', datetime.now(timezone.utc).isoformat(), task_id))
                 conn.commit()
                 global_logger.info(f"已将 {len(in_progress_tasks)} 个进行中任务标记为失败")
             else:

@@ -4,6 +4,17 @@ import unicodedata
 import logging
 from logging.handlers import RotatingFileHandler
 from glob import glob
+from enum import Enum
+
+class TaskStatus(str, Enum):
+    IN_PROGRESS = "进行中"
+    COMPLETED = "完成"
+    CANCELLED = "取消"
+    ERROR = "错误"
+
+    @classmethod
+    def all(cls):
+        return [item.value for item in cls]
 
 def json_output(data):
     return json.dumps(data, indent=4, ensure_ascii=False)

@@ -13,10 +13,13 @@ def get_default_config():
             'download_torrent': 'false',
             'keep_torrents': 'false',
             'keep_original_file': 'false',
+            'move_path': ''
+        },
+        'advanced':{
             'tags_translation': 'false',
             'prefer_japanese_title': 'true',
             'remove_ads': 'true',
-            'move_path': ''
+            'ehentai_genre': 'false', # 将 E-Hentai 或 NHentai 的 Categories 作为 Genre 使用。设定为 false 时则统一使用 Hentai 作为 Genre。
         },
         'ehentai': {
             'cookie': ''
