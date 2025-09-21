@@ -13,7 +13,7 @@ def get_default_config():
             'download_torrent': 'false',
             'keep_torrents': 'false',
             'keep_original_file': 'false',
-            'tags_translation': 'true',
+            'tags_translation': 'false',
             'prefer_japanese_title': 'true',
             'remove_ads': 'true',
             'move_path': ''

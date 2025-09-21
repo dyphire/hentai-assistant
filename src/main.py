@@ -123,7 +123,7 @@ def check_config():
     app.config['download_torrent'] = str(general.get('download_torrent', 'false')).lower() in TRUE_VALUES
     app.config['keep_torrents'] = str(general.get('keep_torrents', 'false')).lower() in TRUE_VALUES
     app.config['keep_original_file'] = str(general.get('keep_original_file', 'false')).lower() in TRUE_VALUES
-    app.config['tags_translation'] = str(general.get('tags_translation', 'true')).lower() in TRUE_VALUES
+    app.config['tags_translation'] = str(general.get('tags_translation', 'false')).lower() in TRUE_VALUES
     app.config['prefer_japanese_title'] = str(general.get('prefer_japanese_title', 'true')).lower() in TRUE_VALUES
     app.config['remove_ads'] = str(general.get('remove_ads', 'true')).lower() in TRUE_VALUES
     app.config['move_path'] = str(general.get('move_path', '')).rstrip('/') or None
