@@ -123,13 +123,14 @@ def check_config():
     app.config['download_torrent'] = str(general.get('download_torrent', 'false')).lower() in TRUE_VALUES
     app.config['keep_torrents'] = str(general.get('keep_torrents', 'false')).lower() in TRUE_VALUES
     app.config['keep_original_file'] = str(general.get('keep_original_file', 'false')).lower() in TRUE_VALUES
+    app.config['prefer_japanese_title'] = str(general.get('prefer_japanese_title', 'true')).lower() in TRUE_VALUES
     app.config['move_path'] = str(general.get('move_path', '')).rstrip('/') or None
     
     advanced = config_data.get('advanced', {})
     app.config['tags_translation'] = str(advanced.get('tags_translation', 'false')).lower() in TRUE_VALUES
-    app.config['prefer_japanese_title'] = str(advanced.get('prefer_japanese_title', 'true')).lower() in TRUE_VALUES
-    app.config['remove_ads'] = str(advanced.get('remove_ads', 'true')).lower() in TRUE_VALUES
+    app.config['remove_ads'] = str(advanced.get('remove_ads', 'false')).lower() in TRUE_VALUES
     app.config['ehentai_genre'] = str(advanced.get('ehentai_genre', 'false')).lower() in TRUE_VALUES
+    app.config['aggressive_series_detection'] = str(advanced.get('aggressive_series_detection', 'false')).lower() in TRUE_VALUES
 
     # E-Hentai 设置
     ehentai_config = config_data.get('ehentai', {})
@@ -273,7 +274,7 @@ def clean_name(title):
     name = re.sub(r'[\s\-_:：•·․,，。\'’?？!！~⁓～]+$', '', title)
     return name.strip()
 
-def extract_before_chapter(filename, matched=False):
+def extract_before_chapter(filename):
     patterns = [
         # 1 中文/阿拉伯数字
         r'(.*?)第?\s*[一二三四五六七八九十\d]+\s*[卷巻话話回迴編篇章册冊席期辑輯节節部]',
@@ -285,11 +286,9 @@ def extract_before_chapter(filename, matched=False):
         r'(.*?)\s*(?:vol|v|#|＃)[\s\.]*\d+',
         # 5. 方括号+数字 [数字]
         r'(.*?)\[\d+\]',
-        # 6. 罗马数字
-        r'(.*?)([IVXLCDM]+)\b',
-        # 7. 上中下前后
-        r'^(.*?)(?:[上中下前后後]$|[上中下前后後]編)$',
-        # 8. 纯数字
+        # 6. 上中下前后
+        r'^(.*?)(?:[上中下前后後](?:編|回)|[上中下前后後]$)',
+        # 7. 纯数字
         r'(.*?)\s*\d+'
     ]
 
@@ -300,7 +299,8 @@ def extract_before_chapter(filename, matched=False):
             return clean_name(m.group(1)).strip()
     
     # 如果没有匹配任何章节模式 → 返回第一个空格前的内容
-    if matched:
+    is_aggressive_series_detection = app.config.get('aggressive_series_detection', False)
+    if is_aggressive_series_detection:
         filename = filename.strip()
         idx = filename.find(' ')
         if idx == -1:
@@ -347,6 +347,17 @@ def parse_eh_tags(tags):
                     language_code = langcodes.find(tag_name).language
                     if language_code:
                         comicinfo['LanguageISO'] = language_code # 转换为BCP-47
+            elif namespace == 'parody':
+                # 提取 parody 内容至 SeriesGroup
+                if tag_name not in ['original', 'various']:
+                    #kanji_parody = ehentai.get_original_tag(tag_name) # 将提取到合集的 Tag 翻译为日文
+                    tag_name = eh_translator.get_translation(tag_name, namespace)
+                    tag_list.append(f"{namespace}:{tag_name}") #  此处保留 namespace，方便所有 parody 相关的 tag 能排序在一块
+                    #if not kanji_parody == None and not app.config.get('tags_translation', True):
+                    #    comicinfo['Genre'] = comicinfo['Genre'] + ', Parody'
+                    #    collectionlist.append(kanji_parody)
+                    #else:
+                    #    collectionlist.append(tag_name)
             elif namespace in ['character']:
                 tag_name = eh_translator.get_translation(tag_name, namespace)
                 tag_list.append(f"{namespace}:{tag_name}") # 保留 namespace，理由同 parody
@@ -411,10 +422,7 @@ def parse_gmetadata(data):
     if comic_market:
        add_tag_to_front(comicinfo, f"c{comic_market.group(1)}")
     if data['category'].lower() not in ['imageset']:
-        if 'SeriesGroup' not in comicinfo:
-            comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'], comicinfo['SeriesGroup'] = parse_filename(text, eh_translator)
-        else:
-            comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'], _ = parse_filename(text, eh_translator)
+        comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'] = parse_filename(text, eh_translator)
     else:
         comicinfo['Title'] = text
 
@@ -424,14 +432,14 @@ def parse_gmetadata(data):
     if comicinfo['Penciller'] == None:
         tags = data.get("tags", [])
         fill_field(comicinfo, "Penciller", tags, ["artist", "group"])
-    # 尝试提取可能的系列名称
+    # 当 tags 中存在 multi-work series 时, 尝试为 AlternateSeries 字段赋值
     series_keywords = ["multi-work series", "系列作品"]
-    matched = False
     if comicinfo and comicinfo.get('Tags'):
         tags_list = [tag.strip() for tag in comicinfo['Tags'].split(', ')]
         matched = any(k.lower() == t.lower() for k in series_keywords for t in tags_list)
-    if comicinfo and comicinfo.get('Title'):
-        comicinfo['AlternateSeries'] = extract_before_chapter(comicinfo['Title'], matched)
+        if matched:
+            if comicinfo and comicinfo.get('Title'):
+                comicinfo['AlternateSeries'] = extract_before_chapter(comicinfo['Title'])
     return comicinfo
 
 def check_task_cancelled(task_id):

@@ -221,16 +221,23 @@ class EHentaiTools:
                                         if 'Seeds' in td.text:
                                             seeds_count = re.search(r'(\d+)', td.text).group(1)
                                 torrent_list.append({'name':torrent_name, 'link':torrent_link, 'count':int(seeds_count)})
-                            max_seeds_torrent = max(torrent_list, key=lambda x: x.get('count', 0))
-                            if self.logger: self.logger.info(f"共找到{len(torrent_list)}个有效种子, 本次选择, {max_seeds_torrent}")
-                            # 将种子下载至本地
-                            torrent = self.session.get(max_seeds_torrent['link'])
-                            torrent_path = os.path.join(check_dirs('./data/ehentai/torrents'), max_seeds_torrent['name'])
-                            with open(torrent_path, 'wb') as f:
-                                if self.logger: self.logger.info(f"开始下载: {torrent_link} ==> {torrent_path}")
-                                f.write(torrent.content)
-                            # 再将种子推送到 aria2, 种子将会下载到 dir
-                            return 'torrent', torrent_path
+                            # 边缘情况处理: 检查 torrent_list 是否为空以防止 ValueError
+                            if torrent_list:
+                                # 可读性改进: lambda 中使用更具描述性的变量名 `torrent`
+                                # 最佳实践: .get() 方法可以安全地处理缺少 'count' 键的情况
+                                max_seeds_torrent = max(torrent_list, key=lambda torrent: torrent.get('count', 0))
+                                if self.logger: self.logger.info(f"共找到{len(torrent_list)}个有效种子, 本次选择, {max_seeds_torrent}")
+                                
+                                # 将种子下载至本地
+                                torrent = self.session.get(max_seeds_torrent['link'])
+                                torrent_path = os.path.join(check_dirs('./data/ehentai/torrents'), max_seeds_torrent['name'])
+                                with open(torrent_path, 'wb') as f:
+                                    if self.logger: self.logger.info(f"开始下载: {max_seeds_torrent['link']} ==> {torrent_path}")
+                                    f.write(torrent.content)
+                                # 再将种子推送到 aria2, 种子将会下载到 dir
+                                return 'torrent', torrent_path
+                            else:
+                                if self.logger: self.logger.warning("未找到任何有效种子。")
             if mode == "archive" or mode == "both":
                 # 直接使用GP下载Archive
                 # 获取 Archive

@@ -106,9 +106,9 @@ def parse_filename(text, translator):
                 print('\nWriter:', writer)
                 penciller = penciller.split(s)[1]
                 print('Penciller:', penciller)
-        return title, writer, penciller, parody
+        return title, writer, penciller
     else:
-        return title, None, None, parody
+        return title, None, None
 
 def get_task_logger(task_id=None):
     MAX_UUID_LOG_FILES = 5

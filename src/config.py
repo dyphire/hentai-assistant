@@ -13,13 +13,14 @@ def get_default_config():
             'download_torrent': 'false',
             'keep_torrents': 'false',
             'keep_original_file': 'false',
+            'prefer_japanese_title': 'true',
             'move_path': ''
         },
         'advanced':{
             'tags_translation': 'false',
-            'prefer_japanese_title': 'true',
-            'remove_ads': 'true',
+            'remove_ads': 'false',
             'ehentai_genre': 'false', # 将 E-Hentai 或 NHentai 的 Categories 作为 Genre 使用。设定为 false 时则统一使用 Hentai 作为 Genre。
+            'aggressive_series_detection': 'false' # 启用后，E-Hentai 会对 AltnateSeries 字段进行更激进的检测。
         },
         'ehentai': {
             'cookie': ''
@@ -49,24 +50,28 @@ def save_config(config_data):
     
     config_to_save = {k: v for k, v in config_data.items() if k != 'status'}
 
+    config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str
+
+    for section_name, section_data in config_to_save.items():
+        config.add_section(section_name)
+        for key, value in section_data.items():
+            if isinstance(value, bool):
+                config.set(section_name, key, str(value).lower())
+            else:
+                config.set(section_name, key, str(value))
+
     try:
-        with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
-            section_count = 0
-            for section_name, section_data in config_to_save.items():
-                if section_count > 0:
-                    f.write('\n')
-                f.write(f'[{section_name}]\n')
-                for key, value in section_data.items():
-                    if isinstance(value, bool):
-                        f.write(f'{key}={str(value).lower()}\n')
-                    elif isinstance(value, str) and (' ' in value or any(c in value for c in ['#', ';', '='])):
-                        f.write(f'{key}="{value}"\n')
-                    else:
-                        f.write(f'{key}={value}\n')
-                section_count += 1
+        with open(CONFIG_PATH, 'w', encoding='utf-8') as configfile:
+            config.write(configfile)
     except Exception as e:
         print(f"Error saving config file: {e}")
         raise
+
+def unquote_recursive(s):
+    if isinstance(s, str) and len(s) > 1 and s.startswith('"') and s.endswith('"'):
+        return unquote_recursive(s[1:-1])
+    return s
 
 def load_config():
     # 加载 config.ini 文件，如果不存在则创建并使用默认值
@@ -88,7 +93,10 @@ def load_config():
                     config_data[section] = {}
                     for key, value in config.items(section):
                         if key in default_config[section]:
-                            config_data[section][key] = value
+                            if key == 'cookie':
+                                config_data[section][key] = unquote_recursive(value)
+                            else:
+                                config_data[section][key] = value
         except Exception as e:
             print(f"Error reading config file '{CONFIG_PATH}', using default config: {e}")
             config_data = default_config
