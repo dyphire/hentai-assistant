@@ -20,7 +20,8 @@ def get_default_config():
             'tags_translation': 'false',
             'remove_ads': 'false',
             'ehentai_genre': 'false', # 将 E-Hentai 或 NHentai 的 Categories 作为 Genre 使用。设定为 false 时则统一使用 Hentai 作为 Genre。
-            'aggressive_series_detection': 'false' # 启用后，E-Hentai 会对 AltnateSeries 字段进行更激进的检测。
+            'aggressive_series_detection': 'false', # 启用后，E-Hentai 会对 AltnateSeries 字段进行更激进的检测。
+            'apprise': ''
         },
         'ehentai': {
             'cookie': ''

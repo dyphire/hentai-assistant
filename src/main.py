@@ -16,7 +16,7 @@ from providers import komga
 from providers import aria2
 from providers import ehentai
 from providers import nhentai
-from utils import check_dirs, is_valid_zip, parse_filename, TaskStatus
+from utils import check_dirs, is_valid_zip, parse_filename, TaskStatus, task_failure_notification, AppriseConfig
 import cbztool
 from database import task_db
 from config import load_config, save_config
@@ -131,6 +131,8 @@ def check_config():
     app.config['remove_ads'] = str(advanced.get('remove_ads', 'false')).lower() in TRUE_VALUES
     app.config['ehentai_genre'] = str(advanced.get('ehentai_genre', 'false')).lower() in TRUE_VALUES
     app.config['aggressive_series_detection'] = str(advanced.get('aggressive_series_detection', 'false')).lower() in TRUE_VALUES
+    app.config['apprise'] = str(advanced.get('apprise', '')).strip() or None
+    if app.config['apprise']: global_logger.info("通知服务已启用")
 
     # E-Hentai 设置
     ehentai_config = config_data.get('ehentai', {})
@@ -289,7 +291,7 @@ def extract_before_chapter(filename):
         # 6. 上中下前后
         r'^(.*?)(?:[上中下前后後](?:編|回)|[上中下前后後]$)',
         # 7. 纯数字
-        r'(.*?)\s*\d+'
+        r'(.*?)\s*\d+$'
     ]
 
     filename = normalize_tilde(filename)
@@ -449,33 +451,28 @@ def check_task_cancelled(task_id):
             raise Exception("Task was cancelled by user")
 
 def download_task(url, mode, task_id, logger=None):
-    try:
-        if logger: logger.info(f"Task {task_id} started, downloading from: {url}")
+    if logger: logger.info(f"Task {task_id} started, downloading from: {url}")
 
-        # 检查是否被取消
-        check_task_cancelled(task_id)
+    # 检查是否被取消
+    check_task_cancelled(task_id)
 
-        # 检测 URL 类型并选择相应的下载器
-        download_gallery_task(url, mode, task_id, logger=logger)
-    except Exception as e:
-        error_msg = str(e)
-        if "cancelled by user" in error_msg:
-            if logger: logger.info(f"Task {task_id} was cancelled by user")
-            with tasks_lock:
-                if task_id in tasks:
-                    tasks[task_id].status = TaskStatus.CANCELLED
-            # 更新数据库状态
-            task_db.update_task(task_id, status=TaskStatus.CANCELLED)
-        else:
-            if logger: logger.error(f"Task {task_id} failed with error: {e}")
-            with tasks_lock:
-                if task_id in tasks:
-                    tasks[task_id].status = TaskStatus.ERROR
-                    tasks[task_id].error = str(e)
-            # 更新数据库状态
-            task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
+    # 检测 URL 类型并选择相应的下载器
+    result = download_gallery_task(url, mode, task_id, logger=logger)
+    
+    # 任务完成通知仍然在此处处理
+    if app.config['apprise'] and result and result.get('Title'):
+        msg = AppriseConfig(app.config['apprise'])
+        msg_content = [
+            result['Title'],
+            f"TaskID: {task_id}",
+            f"作者: {result.get('Writer', '未知')}",
+            f"画师: {result.get('Penciller', '未知')}"
+        ]
+        if result.get('AlternateSeries'):
+            msg_content.append(result['AlternateSeries'])
+        msg.send_message(message=("\n").join(msg_content), title="Hentai Assistant 任务完成")
 
-def post_download_processing(dl, gmetadata, task_id, logger=None, is_nhentai=False):
+def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=False):
     try:
         # 检查是否被取消
         check_task_cancelled(task_id)
@@ -484,7 +481,6 @@ def post_download_processing(dl, gmetadata, task_id, logger=None, is_nhentai=Fal
             return None
 
         # 创建 ComicInfo.xml 并转换为 CBZ
-        metadata = parse_gmetadata(gmetadata)
         if metadata.get('Writer') or metadata.get('Tags'):
             author = metadata.get('Penciller') or metadata.get('Writer') or 'Other'
             writer = metadata.get('Writer') or metadata.get('Penciller') or 'Other'
@@ -528,98 +524,91 @@ def post_download_processing(dl, gmetadata, task_id, logger=None, is_nhentai=Fal
         raise e
 
 def download_gallery_task(url, mode, task_id, logger=None):
-    try:
-        # 检查是否被取消
+    # 检查是否被取消
+    check_task_cancelled(task_id)
+
+    # 判断平台
+    is_nhentai = 'nhentai.net' in url
+
+    if is_nhentai:
+        gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('nhentai_cookie'), logger=logger)
+    else:
+        gallery_tool = ehentai.EHentaiTools(cookie=app.config.get('eh_cookie'), logger=logger)
+
+    # 获取画廊元数据
+    gmetadata = gallery_tool.get_gmetadata(url)
+    if not gmetadata or 'gid' not in gmetadata:
+        raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
+    # 获取标题
+    if 'title_jpn' in gmetadata and gmetadata['title_jpn'] != None:
+        title = html.unescape(gmetadata['title_jpn'])
+    else:
+        title = html.unescape(gmetadata['title'])
+    filename = f"{sanitize_filename(title)} [{gmetadata['gid']}]"
+    if not is_nhentai:
+        filename += ".zip"
+
+    if logger: logger.info(f"准备下载: {filename}")
+
+    # 更新内存和数据库任务信息
+    with tasks_lock:
+        if task_id in tasks:
+            tasks[task_id].filename = title
+    task_db.update_task(task_id, filename=filename)
+
+    check_task_cancelled(task_id)
+
+    # 下载路径
+    download_dir = './data/download/nhentai' if is_nhentai else './data/download/ehentai'
+    path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
+
+    dl = None
+    if is_nhentai:
+        # nhentai 直接下载
+        dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
+    else:
+        # ehentai 下载模式选择
+        eh_mode = get_eh_mode(app.config, mode)
+        result = gallery_tool.archive_download(url=url, mode=eh_mode)
+
         check_task_cancelled(task_id)
 
-        # 判断平台
-        is_nhentai = 'nhentai.net' in url
+        if result:
+            if result[0] == 'torrent':
+                dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
+                if dl is None:
+                    # 死种尝试 archive
+                    result = gallery_tool.archive_download(url=url, mode='archive')
+            elif result[0] == 'archive':
+                if not app.config['aria2_toggle']:
+                    dl = gallery_tool._download(
+                        url=result[1],
+                        path=path,
+                        task_id=task_id,
+                        tasks=tasks,
+                        tasks_lock=tasks_lock
+                    )
+                else:
+                    dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
 
-        if is_nhentai:
-            gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('nhentai_cookie'), logger=logger)
-        else:
-            gallery_tool = ehentai.EHentaiTools(cookie=app.config.get('eh_cookie'), logger=logger)
+    check_task_cancelled(task_id)
+    
+    
+    metadata = parse_gmetadata(gmetadata)
+    # 统一后处理
+    final_path = post_download_processing(dl, metadata, task_id, logger, is_nhentai=is_nhentai)
 
-        # 获取画廊元数据
-        gmetadata = gallery_tool.get_gmetadata(url)
-        if not gmetadata or 'gid' not in gmetadata:
-            raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
-        # 获取标题
-        if 'title_jpn' in gmetadata and gmetadata['title_jpn'] != None:
-            title = html.unescape(gmetadata['title_jpn'])
-        else:
-            title = html.unescape(gmetadata['title'])
-        filename = f"{sanitize_filename(title)} [{gmetadata['gid']}]"
-        if not is_nhentai:
-            filename += ".zip"
-
-        if logger: logger.info(f"准备下载: {filename}")
-
-        # 更新内存和数据库任务信息
+    if final_path and is_valid_zip(final_path):
+        if logger: logger.info(f"Task {task_id} completed successfully.")
         with tasks_lock:
             if task_id in tasks:
-                tasks[task_id].filename = title
-        task_db.update_task(task_id, filename=filename)
-
-        check_task_cancelled(task_id)
-
-        # 下载路径
-        download_dir = './data/download/nhentai' if is_nhentai else './data/download/ehentai'
-        path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
-
-        dl = None
-        if is_nhentai:
-            # nhentai 直接下载
-            dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
-        else:
-            # ehentai 下载模式选择
-            eh_mode = get_eh_mode(app.config, mode)
-            result = gallery_tool.archive_download(url=url, mode=eh_mode)
-
-            check_task_cancelled(task_id)
-
-            if result:
-                if result[0] == 'torrent':
-                    dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
-                    if dl is None:
-                        # 死种尝试 archive
-                        result = gallery_tool.archive_download(url=url, mode='archive')
-                elif result[0] == 'archive':
-                    if not app.config['aria2_toggle']:
-                        dl = gallery_tool._download(
-                            url=result[1],
-                            path=path,
-                            task_id=task_id,
-                            tasks=tasks,
-                            tasks_lock=tasks_lock
-                        )
-                    else:
-                        dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
-
-        check_task_cancelled(task_id)
-
-        # 统一后处理
-        final_path = post_download_processing(dl, gmetadata, task_id, logger, is_nhentai=is_nhentai)
-
-        if final_path and is_valid_zip(final_path):
-            if logger: logger.info(f"Task {task_id} completed successfully.")
-            with tasks_lock:
-                if task_id in tasks:
-                    tasks[task_id].status = TaskStatus.COMPLETED
-
-            task_db.update_task(task_id, status=TaskStatus.COMPLETED)
-            return True
-        else:
-            raise ValueError("Downloaded file is not a valid zip archive.")
-
-    except Exception as e:
-        if logger: logger.error(f"Download failed: {e}")
-        with tasks_lock:
-            if task_id in tasks:
-                tasks[task_id].status = TaskStatus.ERROR
-                tasks[task_id].error = str(e)
-        task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
-        raise e
+                tasks[task_id].status = TaskStatus.COMPLETED
+        task_db.update_task(task_id, status=TaskStatus.COMPLETED)
+        return metadata # 返回 metadata 以便装饰器或调用者处理完成通知
+    else:
+        error_message = "Downloaded file is not a valid zip archive."
+        # 此处直接抛出异常，装饰器会捕获并发送失败通知
+        raise ValueError(error_message)
 
 @app.route('/api/download', methods=['GET'])
 def download_url():
@@ -630,7 +619,11 @@ def download_url():
     # 两位年份+月日时分秒，使用UTC时间避免时区问题
     task_id = datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')
     logger, log_buffer = get_task_logger(task_id)
-    future = executor.submit(download_task, url, mode, task_id, logger)
+    
+    # 动态应用装饰器
+    decorated_download_task = task_failure_notification(task_id, logger, tasks_lock, tasks, app.config)(download_task)
+    
+    future = executor.submit(decorated_download_task, url, mode, task_id, logger)
     with tasks_lock:
         tasks[task_id] = TaskInfo(future, logger, log_buffer)
 
