@@ -10,3 +10,4 @@ pyzbar==0.1.9
 Pillow==11.0.0
 numpy==1.26.4
 cloudscraper==1.2.71
+apprise==1.7.1
