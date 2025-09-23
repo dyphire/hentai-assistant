@@ -268,12 +268,12 @@ def sanitize_filename(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', s)
 
 def normalize_tilde(filename: str) -> str:
-    filename = re.sub(r'(?<!\s)([〜~「])', r' \1', filename)
     filename = re.sub(r'([话話])(?!\s)', r'\1 ', filename)
+    filename = re.sub(r'([~⁓～-—_「])', ' ', filename)
     return filename
 
 def clean_name(title):
-    name = re.sub(r'[\s\-_:：•·․,，。\'’?？!！~⁓～]+$', '', title)
+    name = re.sub(r'[\s\-—_:：•·․,，。\'’?？!！~⁓～]+$', '', title)
     return name.strip()
 
 def extract_before_chapter(filename):
@@ -286,12 +286,12 @@ def extract_before_chapter(filename):
         r'(.*?)[卷巻回迴編篇章册冊席期辑輯节節部]\s*[一二三四五六七八九十\d]+',
         # 4. Vol/Vol./vol/v/V + 数字
         r'(.*?)\s*(?:vol|v|#|＃)[\s\.]*\d+',
-        # 5. 方括号+数字 [数字]
-        r'(.*?)\[\d+\]',
+        # 5. 圆方括号+数字
+        r'(.*?)\s*[\[\(（]\d+[\]\)）]\s*$',
         # 6. 上中下前后
-        r'^(.*?)(?:[上中下前后後](?:編|回)|[上中下前后後]$)',
+        r'^(.*?)(?:[上中下前后後](?:編|回)|[上中下前后後]\s*$)',
         # 7. 纯数字
-        r'(.*?)\s*\d+$'
+        r'(.*?)\s*\d+(\s|$)',
     ]
 
     filename = normalize_tilde(filename)
