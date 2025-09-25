@@ -269,7 +269,7 @@ def sanitize_filename(s: str) -> str:
 
 def normalize_tilde(filename: str) -> str:
     filename = re.sub(r'([话話])(?!\s)', r'\1 ', filename)
-    filename = re.sub(r'([~⁓～-—_「])', ' ', filename)
+    filename = re.sub(r'([~⁓～—_「-])', ' ', filename)
     return filename
 
 def clean_name(title):
@@ -956,11 +956,7 @@ def serve_vue_app(path):
         return redirect(f"http://localhost:5173/{path}") # 重定向到 Vue 开发服务器
     else: # 如果是生产模式
         static_dir = app.static_folder
-        # 如果请求的路径在静态文件夹中存在，则提供该文件
-        if path and os.path.exists(os.path.join(static_dir, path)):
-            return send_from_directory(static_dir, path)
-        
-        # 否则，提供 index.html，让 Vue Router 处理路由
+        # 对于生产模式，直接提供 index.html，让 Vue Router 处理所有路由
         index_path = os.path.join(static_dir, 'index.html')
         if not os.path.exists(index_path):
             return "Vue.js application not built. Please run 'npm run build' in the webui directory.", 500

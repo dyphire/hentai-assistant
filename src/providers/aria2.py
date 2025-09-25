@@ -80,6 +80,13 @@ class Aria2RPC:
 
             result = self.tell_status(gid)
             status = result['result']['status']
+            
+            # 如果下载文件已经存在, 且未在 Aria2 开启 --allow-overwrite, 则会报错并返回 errorCode 13, 此时直接返回文件路径
+            if status == 'error' and result['result']['errorCode'] == "13":
+                if logger:
+                    logger.info("文件已存在，下载任务将被跳过")
+                return result['result']['files'][0]['path']
+            
             completelen = int(result['result']['completedLength'])
             totallen = int(result['result']['totalLength'])
             download_speed = int(result['result']['downloadSpeed'])
