@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - test # 添加 test 分支
     paths:
       - 'src/**'
       - '.github/workflows/docker-build.yml'
@@ -43,7 +44,9 @@ jobs:
           context: . # Dockerfile 所在的目录
           push: true
           file: ./dockerfile
-          tags: ghcr.io/${{ github.actor }}/hentai-assistant:latest
+          tags: |
+            ghcr.io/${{ github.actor }}/hentai-assistant:${{ github.ref_name }}
+            ${{ github.ref_name == 'main' && format('ghcr.io/{0}/hentai-assistant:latest', github.actor) || '' }}
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
