@@ -29,7 +29,7 @@ from providers.ehtranslator import EhTagTranslator
 app = Flask(
     __name__,
     static_folder='../webui/dist', # Vue.js 构建后的完整目录（包含index.html和assets）
-    static_url_path='/' # 静态文件URL前缀改为根路径
+    static_url_path='/static-assets' # 将静态文件URL前缀改为/static-assets，避免与前端路由冲突
 )
 CORS(app) # 在 Flask 应用中启用 CORS
 # 过滤掉 /api/task_stats 的访问日志
@@ -956,7 +956,12 @@ def serve_vue_app(path):
         return redirect(f"http://localhost:5173/{path}") # 重定向到 Vue 开发服务器
     else: # 如果是生产模式
         static_dir = app.static_folder
-        # 对于生产模式，直接提供 index.html，让 Vue Router 处理所有路由
+        # 首先尝试提供请求的路径作为静态文件（例如CSS/JS/图片等）
+        requested_file = os.path.join(static_dir, path)
+        if os.path.exists(requested_file) and not os.path.isdir(requested_file):
+            return send_from_directory(static_dir, path)
+        
+        # 如果请求的不是静态文件，则提供 index.html 让 Vue Router 处理
         index_path = os.path.join(static_dir, 'index.html')
         if not os.path.exists(index_path):
             return "Vue.js application not built. Please run 'npm run build' in the webui directory.", 500
