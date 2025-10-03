@@ -173,7 +173,7 @@ class EHentaiTools:
                 self.logger.error(f"下载失败: {e}")
             return None
 
-    def archive_download(self, url, mode):
+    def get_download_link(self, url, mode):
         eh_valid, exh_valid = self.is_valid_cookie()
         if exh_valid:
             url = url.replace("e-hentai.org", "exhentai.org")

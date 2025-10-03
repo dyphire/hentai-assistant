@@ -5,70 +5,16 @@ import logging
 from logging.handlers import RotatingFileHandler
 from glob import glob
 from enum import Enum
-import functools
-import apprise
 
 class TaskStatus(str, Enum):
     IN_PROGRESS = "进行中"
     COMPLETED = "完成"
     CANCELLED = "取消"
     ERROR = "错误"
-
     @classmethod
     def all(cls):
         return [item.value for item in cls]
     
-class AppriseConfig:
-    def __init__(self, url):
-        self.url = url
-
-    def send_message(self, message, title):
-        apobj = apprise.Apprise()
-        # 添加通知服务 URL（这里是 Telegram 示例）
-        apobj.add(self.url)
-        # 发送通知
-        apobj.notify(
-            body=message,  # 消息体
-            title=title   # 可选：标题
-        )
-
-def task_failure_notification(task_id, logger, tasks_lock, tasks, app_config):
-    def decorator(func):
-        @functools.wraps(func)
-        def wrapper(*args, **kwargs):
-            try:
-                return func(*args, **kwargs)
-            except Exception as e:
-                error_msg = str(e)
-                if "cancelled by user" in error_msg:
-                    if logger: logger.info(f"Task {task_id} was cancelled by user")
-                    with tasks_lock:
-                        if task_id in tasks:
-                            tasks[task_id].status = TaskStatus.CANCELLED
-                    # 更新数据库状态
-                    from database import task_db
-                    task_db.update_task(task_id, status=TaskStatus.CANCELLED)
-                else:
-                    if logger: logger.error(f"Task {task_id} failed with error: {e}")
-                    with tasks_lock:
-                        if task_id in tasks:
-                            tasks[task_id].status = TaskStatus.ERROR
-                            tasks[task_id].error = str(e)
-                    # 更新数据库状态
-                    from database import task_db
-                    task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
-                    
-                    # 发送失败通知
-                    if app_config.get('apprise'):
-                        msg = AppriseConfig(app_config['apprise'])
-                        msg_content = [
-                            f"任务ID: {task_id}",
-                            f"失败原因: {error_msg}"
-                        ]
-                        msg.send_message(message=("\n").join(msg_content), title="Hentai Assistant 任务失败")
-                raise e
-        return wrapper
-    return decorator
 
 def json_output(data):
     return json.dumps(data, indent=4, ensure_ascii=False)

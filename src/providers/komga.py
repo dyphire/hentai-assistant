@@ -1,12 +1,22 @@
 import requests
 from urllib.parse import urlparse
-
+import requests
+import json
+import time
+import logging
+import base64 # 新增导入 base64
 from utils import is_url
 
 class KomgaAPI:
-    def __init__(self, server, token, logger=None):
+    def __init__(self, server, username, password, logger=None):
         self.server = server
-        self.headers = {'X-API-Key': token, 'accept': '*/*', 'Content-Type': 'application/json'}
+        auth_string = f"{username}:{password}"
+        encoded_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+        self.headers = {
+            'Authorization': f'Basic {encoded_auth}',
+            'accept': '*/*',
+            'Content-Type': 'application/json'
+        }
         session = requests.Session()
         session.headers.update(self.headers)
         self.session = session
@@ -34,6 +44,7 @@ class KomgaAPI:
             return self.session.post(self.server + f'/api/v1/libraries/{library_id}/scan?deep=false')
         elif deep == True:
             return self.session.post(self.server + f'/api/v1/libraries/{library_id}/scan?deep=true')
+        
     def get_book(self, text):
         # 获取特定 bookId 的信息
         if is_url(text):
@@ -185,3 +196,70 @@ class KomgaAPI:
                         break
                     else: # 否则,新建一个合集
                         self.session.patch(self.server + f'/api/v1/collections/', params=collections_params)
+                        
+class EventListener:
+    def __init__(self, url: str, username: str, password: str, logger=None, reconnect_delay: int = 5):
+        self.url = f"{url.strip("/")}/sse/v1/events" if not url.endswith("/sse/v1/events") else url
+        self.reconnect_delay = reconnect_delay
+        self.session = requests.Session()
+        self.logger = logger if logger else logging.getLogger(__name__)
+
+        # 生成 Basic Auth 头
+        auth_string = f"{username}:{password}"
+        encoded_auth = base64.b64encode(auth_string.encode('utf-8')).decode('utf-8')
+        self.headers = {
+            'Accept': 'text/event-stream',
+            'Authorization': f'Basic {encoded_auth}'
+        }
+        self.session.headers.update(self.headers)
+        self._event_buffer = {} # 用于暂存当前事件的字段
+
+    def listen(self): # 返回类型改为 Any 或 Iterator[Dict]
+        while True:
+            try:
+                with self.session.get(self.url, stream=True) as response:
+                    if response.status_code != 200:
+                        self.logger.error(f"连接失败，状态码: {response.status_code}")
+                        time.sleep(self.reconnect_delay)
+                        continue
+
+                    self._event_buffer = {} # 在每次连接成功时初始化/重置缓冲区
+
+                    for line in response.iter_lines(decode_unicode=True):
+                        if line:
+                            self._process_line(line)
+                        elif line == '': # 空行表示一个事件块的结束
+                            if 'event' in self._event_buffer and 'data' in self._event_buffer:
+                                event_type = self._event_buffer.get('event')
+                                event_data = self._event_buffer.get('data')
+                                event_id = self._event_buffer.get('id')
+
+                                packaged_event = {
+                                    "event_type": event_type,
+                                    "data": event_data
+                                }
+                                if event_id:
+                                    packaged_event["id"] = event_id
+
+                                yield packaged_event # 使用 yield 返回封装好的事件
+                            self._event_buffer = {} # 重置缓冲区
+            except requests.exceptions.RequestException as e:
+                self.logger.error(f"连接错误: {e}")
+                self.logger.info(f"{self.reconnect_delay}秒后尝试重连...")
+                time.sleep(self.reconnect_delay)
+
+    def _process_line(self, line: str) -> None:
+        if line.startswith(':') or not line.strip():
+            return
+
+        if line.startswith('data:'):
+            data = line[len('data:'):].strip()
+            try:
+                self._event_buffer['data'] = json.loads(data)
+            except json.JSONDecodeError:
+                self._event_buffer['data'] = data # 如果不是JSON，则存储原始数据
+        elif line.startswith('event:'):
+            self._event_buffer['event'] = line[len('event:'):].strip()
+        elif line.startswith('id:'):
+            self._event_buffer['id'] = line[len('id:'):].strip()
+        # else: 未知行格式直接忽略，不影响事件解析

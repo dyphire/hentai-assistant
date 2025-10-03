@@ -1,6 +1,10 @@
 import os, re, shutil, sqlite3
 import json, html
 from datetime import datetime, timezone
+import subprocess # 导入 subprocess 模块
+import sys # 导入 sys 模块
+import functools
+
 
 from flask import Flask, request, redirect, send_from_directory, Response
 from flask_cors import CORS
@@ -10,18 +14,19 @@ import threading
 from io import StringIO
 import logging
 from logging.handlers import RotatingFileHandler
+import werkzeug.serving # 导入 werkzeug.serving
 
 # import local modules
 from providers import komga
 from providers import aria2
 from providers import ehentai
 from providers import nhentai
-from utils import check_dirs, is_valid_zip, parse_filename, TaskStatus, task_failure_notification, AppriseConfig
+from providers.ehtranslator import EhTagTranslator
+from utils import check_dirs, is_valid_zip, parse_filename, TaskStatus
+from notification import notify
 import cbztool
 from database import task_db
-from config import load_config, save_config
-
-from providers.ehtranslator import EhTagTranslator
+from config import load_config, save_config, check_config
 
 # 配置 Flask 以服务 Vue.js 静态文件
 # 在生产环境中，Vue.js 应用会被构建到 `webui/dist` 目录
@@ -111,105 +116,6 @@ def get_task_logger(task_id):
     logger.propagate = False
 
     return logger, log_buffer
-
-
-def check_config():
-    TRUE_VALUES = {'true', 'enable', '1', 'yes', 'on'}
-    config_data = load_config()
-    
-    # 通用设置
-    general = config_data.get('general', {})
-    app.config['port'] = int(general.get('port', 5001))
-    app.config['download_torrent'] = str(general.get('download_torrent', 'false')).lower() in TRUE_VALUES
-    app.config['keep_torrents'] = str(general.get('keep_torrents', 'false')).lower() in TRUE_VALUES
-    app.config['keep_original_file'] = str(general.get('keep_original_file', 'false')).lower() in TRUE_VALUES
-    app.config['prefer_japanese_title'] = str(general.get('prefer_japanese_title', 'true')).lower() in TRUE_VALUES
-    app.config['move_path'] = str(general.get('move_path', '')).rstrip('/') or None
-    
-    advanced = config_data.get('advanced', {})
-    app.config['tags_translation'] = str(advanced.get('tags_translation', 'false')).lower() in TRUE_VALUES
-    app.config['remove_ads'] = str(advanced.get('remove_ads', 'false')).lower() in TRUE_VALUES
-    app.config['ehentai_genre'] = str(advanced.get('ehentai_genre', 'false')).lower() in TRUE_VALUES
-    app.config['aggressive_series_detection'] = str(advanced.get('aggressive_series_detection', 'false')).lower() in TRUE_VALUES
-    app.config['apprise'] = str(advanced.get('apprise', '')).strip() or None
-    if app.config['apprise']: global_logger.info("通知服务已启用")
-
-    # E-Hentai 设置
-    ehentai_config = config_data.get('ehentai', {})
-    cookie = ehentai_config.get('cookie', '')
-    app.config['eh_cookie'] = {"cookie": cookie} if cookie else {"cookie": ""}
-
-    # nhentai 设置
-    nhentai_config = config_data.get('nhentai', {})
-    nhentai_cookie = nhentai_config.get('cookie', '')
-    app.config['nhentai_cookie'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
-
-    eh = ehentai.EHentaiTools(cookie=app.config['eh_cookie'], logger=global_logger)
-    nh = nhentai.NHentaiTools(cookie=app.config['nhentai_cookie'], logger=global_logger)
-    hath_toggle = eh.is_valid_cookie()
-    nh_toggle = nh.is_valid_cookie()
-
-    # Aria2 RPC 设置
-    aria2_config = config_data.get('aria2', {})
-    aria2_enable = str(aria2_config.get('enable', 'false')).lower() in TRUE_VALUES
-
-    if aria2_enable:
-        global_logger.info("开始测试 Aria2 RPC 的连接")
-        app.config['aria2_server'] = str(aria2_config.get('server', '')).rstrip('/')
-        app.config['aria2_token'] = str(aria2_config.get('token', ''))
-        app.config['aria2_download_dir'] = str(aria2_config.get('download_dir', '')).rstrip('/') or None
-        app.config['real_download_dir'] = str(aria2_config.get('mapped_dir', '')).rstrip('/') or app.config['aria2_download_dir']
-
-        rpc = aria2.Aria2RPC(url=app.config['aria2_server'], token=app.config['aria2_token'], logger=global_logger)
-        try:
-            result = rpc.get_global_stat()
-            if 'result' in result:
-                global_logger.info("Aria2 RPC 连接正常")
-                aria2_toggle = True
-            else:
-                global_logger.error("Aria2 RPC 连接异常, 种子下载功能将不可用")
-                aria2_toggle = False
-        except Exception as e:
-            global_logger.error(f"Aria2 RPC 连接异常: {e}")
-            aria2_toggle = False
-    else:
-        global_logger.info("Aria2 RPC 功能未启用")
-        aria2_toggle = False
-
-    # Komga API 设置
-    komga_config = config_data.get('komga', {})
-    komga_enable = str(komga_config.get('enable', 'false')).lower() in TRUE_VALUES
-    app.config['komga_oneshot'] = str(komga_config.get('oneshot', '_oneshot'))
-
-    if komga_enable:
-        global_logger.info("开始测试 Komga API 的连接")
-        app.config['komga_server'] = str(komga_config.get('server', '')).rstrip('/')
-        app.config['komga_token'] = str(komga_config.get('token', ''))
-        app.config['komga_library_id'] = str(komga_config.get('library_id', ''))
-
-        kmg = komga.KomgaAPI(server=app.config['komga_server'], token=app.config['komga_token'], logger=global_logger)
-        try:
-            library = kmg.get_libraries(library_id=app.config['komga_library_id'])
-            if library.status_code == 200:
-                global_logger.info("Komga API 连接成功")
-                komga_toggle = True
-            else:
-                komga_toggle = False
-                global_logger.error("Komga API 连接异常, 相关功能将不可用")
-        except Exception as e:
-            global_logger.error(f"Komga API 连接异常: {e}")
-            komga_toggle = False
-    else:
-        global_logger.info("Komga API 功能未启用")
-        komga_toggle = False
-
-    app.config['hath_toggle'] = hath_toggle
-    app.config['nh_toggle'] = nh_toggle
-    app.config['aria2_toggle'] = aria2_toggle
-    app.config['komga_toggle'] = komga_toggle
-    app.config['checking_config'] = False
-    global eh_translator
-    eh_translator = EhTagTranslator(enable_translation=app.config.get('tags_translation', True))
 
 def get_eh_mode(config, mode):
     aria2 = config.get('aria2_toggle', False)
@@ -363,7 +269,7 @@ def parse_eh_tags(tags):
             elif namespace in ['character']:
                 tag_name = eh_translator.get_translation(tag_name, namespace)
                 tag_list.append(f"{namespace}:{tag_name}") # 保留 namespace，理由同 parody
-            elif namespace == 'female' or namespace == 'mixed':
+            elif namespace == 'female' or namespace == 'mixed' or namespace == 'location':
                 tag_name = eh_translator.get_translation(tag_name, namespace)
                 tag_list.append(tag_name) # 去掉 namespace, 仅保留内容
             elif namespace == 'male': # male 与 female 存在相同的标签, 但它们在作品中表达的含义是不同的, 为了减少歧义，这里将会丢弃所有 male 相关的共同标签，但是保留 male 限定的标签
@@ -389,17 +295,18 @@ def parse_eh_tags(tags):
 # 解析来自 E-Hentai 或 nhentai API 的画廊信息
 def parse_gmetadata(data):
     comicinfo = {}
+    # 直接使用传入 api 的 url 作为 Web 字段
     # 检查是否为 nhentai 数据（没有 token 字段）
-    if 'token' not in data or data.get('token') == '':
-        # nhentai 数据
-        if 'gid' in data:
-            comicinfo['Web'] = f"https://nhentai.net/g/{data['gid']}/"
-    else:
-        # ehentai 数据
-        comicinfo['Web'] = (
-            f"https://exhentai.org/g/{data['gid']}/{data['token']}/, "
-            f"https://e-hentai.org/g/{data['gid']}/{data['token']}/"
-        )
+    #if 'token' not in data or data.get('token') == '':
+    #    # nhentai 数据
+    #    if 'gid' in data:
+    #        comicinfo['Web'] = f"https://nhentai.net/g/{data['gid']}/"
+    #else:
+    #    # ehentai 数据
+    #    comicinfo['Web'] = (
+    #        f"https://exhentai.org/g/{data['gid']}/{data['token']}/, "
+    #        f"https://e-hentai.org/g/{data['gid']}/{data['token']}/"
+    #    )
     if 'tags' in data:
         comicinfo.update(parse_eh_tags(data['tags']))
     # 根据 ehentai_genre 设置决定是否将 Categories 作为 Genre 还是作为 Tag 使用
@@ -460,17 +367,13 @@ def download_task(url, mode, task_id, logger=None):
     result = download_gallery_task(url, mode, task_id, logger=logger)
     
     # 任务完成通知仍然在此处处理
-    if app.config['apprise'] and result and result.get('Title'):
-        msg = AppriseConfig(app.config['apprise'])
-        msg_content = [
-            result['Title'],
-            f"TaskID: {task_id}",
-            f"作者: {result.get('Writer', '未知')}",
-            f"画师: {result.get('Penciller', '未知')}"
-        ]
-        if result.get('AlternateSeries'):
-            msg_content.append(result['AlternateSeries'])
-        msg.send_message(message=("\n").join(msg_content), title="Hentai Assistant 任务完成")
+    if app.config['notify_toggle'] and 'task.complete' in app.config['notify_events']:
+        event_data = {
+            "url": url,
+            "task_id": task_id,
+            "metadata": result,
+            }
+        notify(event="task.complete", data=event_data, logger=logger, app_config=app.config)
 
 def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=False):
     try:
@@ -513,7 +416,7 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
         # 触发 Komga 媒体库入库扫描
         if app.config['komga_toggle'] and is_valid_zip(dl):
             if app.config['komga_library_id']:
-                kmg = komga.KomgaAPI(server=app.config['komga_server'], token=app.config['komga_token'], logger=logger)
+                kmg = komga.KomgaAPI(server=app.config['komga_server'], username=app.config['komga_username'], password=app.config['komga_password'], logger=logger)
                 if app.config['komga_library_id']:
                     kmg.scan_library(app.config['komga_library_id'])
 
@@ -537,6 +440,17 @@ def download_gallery_task(url, mode, task_id, logger=None):
 
     # 获取画廊元数据
     gmetadata = gallery_tool.get_gmetadata(url)
+    
+    # 在获得 gmetadata 后，触发 task.start 事件
+    if app.config['notify_toggle'] and 'task.start' in app.config['notify_events']:
+        if logger: logger.info("发送 task.start 通知")
+        event_data = {
+            "url": url,
+            "task_id": task_id,
+            "gmetadata": gmetadata,
+        }
+        notify(event="task.start", data=event_data, logger=logger, app_config=app.config)
+    
     if not gmetadata or 'gid' not in gmetadata:
         raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
     # 获取标题
@@ -569,7 +483,7 @@ def download_gallery_task(url, mode, task_id, logger=None):
     else:
         # ehentai 下载模式选择
         eh_mode = get_eh_mode(app.config, mode)
-        result = gallery_tool.archive_download(url=url, mode=eh_mode)
+        result = gallery_tool.get_download_link(url=url, mode=eh_mode)
 
         check_task_cancelled(task_id)
 
@@ -578,7 +492,8 @@ def download_gallery_task(url, mode, task_id, logger=None):
                 dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
                 if dl is None:
                     # 死种尝试 archive
-                    result = gallery_tool.archive_download(url=url, mode='archive')
+                    result = gallery_tool.get_download_link(url=url, mode='archive')
+                    dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
             elif result[0] == 'archive':
                 if not app.config['aria2_toggle']:
                     dl = gallery_tool._download(
@@ -595,6 +510,8 @@ def download_gallery_task(url, mode, task_id, logger=None):
     
     
     metadata = parse_gmetadata(gmetadata)
+    metadata['Web'] = url
+    
     # 统一后处理
     final_path = post_download_processing(dl, metadata, task_id, logger, is_nhentai=is_nhentai)
 
@@ -609,6 +526,43 @@ def download_gallery_task(url, mode, task_id, logger=None):
         error_message = "Downloaded file is not a valid zip archive."
         # 此处直接抛出异常，装饰器会捕获并发送失败通知
         raise ValueError(error_message)
+    
+def task_failure_processing(task_id, logger, tasks_lock, tasks):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception as e:
+                error_msg = str(e)
+                if "cancelled by user" in error_msg:
+                    if logger: logger.info(f"Task {task_id} was cancelled by user")
+                    with tasks_lock:
+                        if task_id in tasks:
+                            tasks[task_id].status = TaskStatus.CANCELLED
+                    # 更新数据库状态
+                    from database import task_db
+                    task_db.update_task(task_id, status=TaskStatus.CANCELLED)
+                else:
+                    if logger: logger.error(f"Task {task_id} failed with error: {e}")
+                    with tasks_lock:
+                        if task_id in tasks:
+                            tasks[task_id].status = TaskStatus.ERROR
+                            tasks[task_id].error = str(e)
+                    # 更新数据库状态
+                    from database import task_db
+                    task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
+                    
+                    # 在获得 gmetadata 后，触发 task.start 事件
+                    if app.config['notify_toggle'] and 'task.error' in app.config['notify_events']:
+                        event_data = {
+                            "task_id": task_id,
+                            "error": str(e)
+                        }
+                        notify(event="task.error", data=event_data, logger=logger, app_config=app.config)
+                raise e
+        return wrapper
+    return decorator
 
 @app.route('/api/download', methods=['GET'])
 def download_url():
@@ -621,7 +575,7 @@ def download_url():
     logger, log_buffer = get_task_logger(task_id)
     
     # 动态应用装饰器
-    decorated_download_task = task_failure_notification(task_id, logger, tasks_lock, tasks, app.config)(download_task)
+    decorated_download_task = task_failure_processing(task_id, logger, tasks_lock, tasks)(download_task)
     
     future = executor.submit(decorated_download_task, url, mode, task_id, logger)
     with tasks_lock:
@@ -969,7 +923,36 @@ def serve_vue_app(path):
 
 if __name__ == '__main__':
     # 初始化时加载配置，config.py 会自动处理文件创建
-    check_config()
+    check_config(app, global_logger)
+    
+    eh_translator = EhTagTranslator(enable_translation=app.config.get('tags_translation', True))
+    
+    # 全局变量用于存储子进程对象
+    notification_process = None
+
+    # 如果 Komga 通知功能开启，启动 notification.py 子进程
+    # 检查是否是 Flask reloader 的主进程 (实际运行应用的代码的进程)，避免重复启动
+    # 当 debug=True 时，WERKZEUG_RUN_MAIN 为 'true' 的是实际运行应用的主进程，其他是 reloader 进程
+    if app.config.get('komga_toggle') and (not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true'):
+        try:
+            # 使用 sys.executable 确保使用与主进程相同的 Python 解释器
+            # 并且明确指定 notification.py 的相对路径，同时传递所需参数
+            komga_server = app.config.get('komga_server', '')
+            komga_username = app.config.get('komga_username', '')
+            komga_password = app.config.get('komga_password', '')
+            webhook_url = app.config.get('notify_webhook', '')
+
+            notification_process = subprocess.Popen([
+                sys.executable,
+                'src/notification.py',
+                '--komga_server', komga_server,
+                '--komga_username', komga_username,
+                '--komga_password', komga_password,
+                '--webhook_url', webhook_url
+            ])
+            global_logger.info(f"notification.py 已作为子进程启动, PID: {notification_process.pid}")
+        except Exception as e:
+            global_logger.error(f"启动 notification.py 失败: {e}")
 
     # 启动时迁移内存中的任务到数据库
     if tasks:
@@ -1006,3 +989,16 @@ if __name__ == '__main__':
         app.run(host='0.0.0.0', port=app.config['port'], debug=debug_mode)
     finally:
         executor.shutdown()
+        # 确保在主应用终止时关闭子进程
+        if notification_process and notification_process.poll() is None:
+            global_logger.info(f"正在终止 notification.py 子进程, PID: {notification_process.pid}")
+            notification_process.terminate()
+            try:
+                # 等待子进程终止，设置超时时间
+                notification_process.wait(timeout=5)
+                global_logger.info("notification.py 子进程已终止。")
+            except subprocess.TimeoutExpired:
+                global_logger.warning("notification.py 子进程在超时时间内未能终止，尝试强制终止。")
+                notification_process.kill()
+                notification_process.wait() # 再次等待，确保进程完全结束
+                global_logger.info("notification.py 子进程已强制终止。")
