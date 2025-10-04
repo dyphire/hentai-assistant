@@ -80,6 +80,9 @@ def listen_event(komga_server: str, komga_username: str, komga_password: str, we
         listener_logger.addHandler(console_handler)
     client = EventListener(url=sse_url, username=komga_username, password=komga_password, logger=listener_logger)
     listener_logger.info(f"开始监听SSE事件流: {sse_url}")
+
+    last_processed_book_id = None
+
     for event in client.listen():
         event_type = event.get('event_type')
         if event_type and event_type != 'TaskQueueStatus':
@@ -87,6 +90,12 @@ def listen_event(komga_server: str, komga_username: str, komga_password: str, we
             # 为新入库事件关联元数据，考虑到 BookAdded 事件可能在元数据写入前触发，改为监听 ThumbnailBookAdded 事件
             if event_type == 'ThumbnailBookAdded':
                 book_id = event['data'].get('bookId')
+                if book_id and book_id == last_processed_book_id:
+                    listener_logger.warning(f"从 SSE Events 连续收到重复的事件: {book_id}, 跳过处理")
+                    continue
+                
+                last_processed_book_id = book_id
+                
                 book_data = KomgaAPI(komga_server, komga_username, komga_password, logger=listener_logger).get_book(book_id).json()
                 listener_logger.info(f'sending webhook for new book to {webhook_url}')
                 send_webhook(url=webhook_url, event="komga.new", data=book_data, logger=listener_logger)

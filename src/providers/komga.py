@@ -199,7 +199,7 @@ class KomgaAPI:
                         
 class EventListener:
     def __init__(self, url: str, username: str, password: str, logger=None, reconnect_delay: int = 5):
-        self.url = f"{url.strip("/")}/sse/v1/events" if not url.endswith("/sse/v1/events") else url
+        self.url = url
         self.reconnect_delay = reconnect_delay
         self.session = requests.Session()
         self.logger = logger if logger else logging.getLogger(__name__)
