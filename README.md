@@ -1,6 +1,6 @@
 # Hentai Assistant
 
-一个全功能的EHentai/NHentai下载助手，支持多种下载方式和自动化管理。
+一个多功能的EHentai/NHentai下载助手，支持多种下载方式和自动化管理。
 
 ## 功能特性
 

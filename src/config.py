@@ -27,6 +27,7 @@ def get_default_config():
             'remove_ads': 'false',
             'ehentai_genre': 'false', # 将 E-Hentai 或 NHentai 的 Categories 作为 Genre 使用。设定为 false 时则统一使用 Hentai 作为 Genre。
             'aggressive_series_detection': 'false', # 启用后，E-Hentai 会对 AltnateSeries 字段进行更激进的检测。
+            'openai_series_detection': 'false' # 启用后，使用配置号的 OpenAI 接口对标题进行系列名和序号的检测。
         },
         'ehentai': {
             'cookie': ''
@@ -56,8 +57,13 @@ def get_default_config():
             'task.start': '',
             'task.complete': '',
             'task.error':'',
-            'komga.new':''   
+            'komga.new':''
             
+        },
+        'openai': {
+            'api_key': '',
+            'base_url': '',
+            'model': ''
         }
     }
 
@@ -109,7 +115,8 @@ def load_config():
                 if section in default_config:
                     config_data[section] = {}
                     for key, value in config.items(section):
-                        if key in default_config[section]:
+                        # For the 'notification' section, load all keys. For others, only load known keys.
+                        if section == 'notification' or key in default_config[section]:
                             if key == 'cookie':
                                 config_data[section][key] = unquote_recursive(value)
                             else:

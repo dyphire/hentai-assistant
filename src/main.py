@@ -14,7 +14,6 @@ import threading
 from io import StringIO
 import logging
 from logging.handlers import RotatingFileHandler
-import werkzeug.serving # 导入 werkzeug.serving
 
 # import local modules
 from providers import komga
@@ -27,6 +26,45 @@ from notification import notify
 import cbztool
 from database import task_db
 from config import load_config, save_config
+from openai_helper import OpenAIHelper
+
+# 全局变量用于存储子进程对象
+notification_process = None
+
+def start_notification_process():
+    """启动 notification.py 子进程"""
+    global notification_process
+    if notification_process and notification_process.poll() is None:
+        global_logger.info("notification.py 进程已在运行中。")
+        return
+
+    try:
+        global_logger.info("正在启动 notification.py 子进程...")
+        notification_process = subprocess.Popen([
+            sys.executable,
+            'src/notification.py'
+        ])
+        global_logger.info(f"notification.py 已作为子进程启动, PID: {notification_process.pid}")
+    except Exception as e:
+        global_logger.error(f"启动 notification.py 失败: {e}")
+
+def stop_notification_process():
+    """停止 notification.py 子进程"""
+    global notification_process
+    if notification_process and notification_process.poll() is None:
+        global_logger.info(f"正在终止 notification.py 子进程, PID: {notification_process.pid}")
+        notification_process.terminate()
+        try:
+            notification_process.wait(timeout=5)
+            global_logger.info("notification.py 子进程已终止。")
+        except subprocess.TimeoutExpired:
+            global_logger.warning("notification.py 子进程在超时时间内未能终止，尝试强制终止。")
+            notification_process.kill()
+            notification_process.wait()
+            global_logger.info("notification.py 子进程已强制终止。")
+        finally:
+            notification_process = None
+
 
 # 配置 Flask 以服务 Vue.js 静态文件
 # 在生产环境中，Vue.js 应用会被构建到 `webui/dist` 目录
@@ -79,14 +117,25 @@ def json_response(data, status=200):
         mimetype="application/json"
     )
 
+def add_console_handler(logger, formatter):
+    """Adds a console handler to the logger."""
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(formatter)
+    logger.addHandler(console_handler)
+
 def init_global_logger():
     logger = logging.getLogger("app")
     logger.setLevel(logging.INFO)
     if not logger.handlers:
-        handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=5, encoding='utf-8')
         formatter = logging.Formatter('%(asctime)s [%(levelname)s] %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
+        
+        # Handler 1: 写入文件
+        file_handler = RotatingFileHandler(LOG_FILE, maxBytes=2*1024*1024, backupCount=5, encoding='utf-8')
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+        
+        # Handler 2: 写入终端
+        add_console_handler(logger, formatter)
     return logger
 
 global_logger = init_global_logger()
@@ -108,9 +157,7 @@ def get_task_logger(task_id):
     logger.addHandler(buffer_handler)
 
     # Handler 2: 写入终端 (用于 Docker logs)
-    console_handler = logging.StreamHandler()  # 默认输出到 sys.stderr
-    console_handler.setFormatter(formatter)
-    logger.addHandler(console_handler)
+    add_console_handler(logger, formatter)
 
     # 阻止日志向上传播到 root logger，避免 werkzeug 环境下重复输出
     logger.propagate = False
@@ -118,8 +165,13 @@ def get_task_logger(task_id):
     return logger, log_buffer
 
 def check_config():
+    """检查并加载应用配置，并根据配置变化管理通知子进程。"""
+    global notification_process
     TRUE_VALUES = {'true', 'enable', '1', 'yes', 'on'}
     config_data = load_config()
+
+    # 记录 Komga 的旧状态
+    was_komga_enabled = app.config.get('komga_toggle', False)
     
     # 通用设置
     general = config_data.get('general', {})
@@ -135,7 +187,7 @@ def check_config():
     app.config['remove_ads'] = str(advanced.get('remove_ads', 'false')).lower() in TRUE_VALUES
     app.config['ehentai_genre'] = str(advanced.get('ehentai_genre', 'false')).lower() in TRUE_VALUES
     app.config['aggressive_series_detection'] = str(advanced.get('aggressive_series_detection', 'false')).lower() in TRUE_VALUES
-
+    app.config['openai_series_detection'] = str(advanced.get('openai_series_detection', 'false')).lower() in TRUE_VALUES
 
     # E-Hentai 设置
     ehentai_config = config_data.get('ehentai', {})
@@ -207,6 +259,30 @@ def check_config():
         global_logger.info("Komga API 功能未启用")
         komga_toggle = False
 
+    is_komga_enabled = komga_toggle
+
+    # 只有在主工作进程中才管理子进程的生命周期，以避免 reloader 重复启动
+    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true':
+        # 检查此函数是否由 API 更新触发
+        is_config_update = app.config.get('checking_config', False)
+
+        if not is_komga_enabled:
+            # 如果 Komga 被禁用，确保监听器是停止的
+            if was_komga_enabled:
+                global_logger.info("Komga 功能已禁用，正在停止通知监听器...")
+                stop_notification_process()
+        else:
+            # 如果 Komga 已启用
+            if not was_komga_enabled:
+                # 情况1: 从禁用 -> 启用
+                global_logger.info("Komga 功能已启用，正在启动通知监听器...")
+                start_notification_process()
+            elif is_config_update:
+                # 情况2: 本来就启用，且用户刚刚保存了配置 -> 重启以应用新配置
+                global_logger.info("配置已更新，正在重启 Komga 通知监听器以应用更改...")
+                stop_notification_process()
+                start_notification_process()
+
     app.config['hath_toggle'] = hath_toggle
     app.config['nh_toggle'] = nh_toggle
     app.config['aria2_toggle'] = aria2_toggle
@@ -219,9 +295,8 @@ def check_config():
     if notification_enable:
         global_logger.info("通知服务功能已启用")
         app.config['notify_toggle'] = True
-        app.config['notify_apprise'] = str(notification_config.get('apprise', '')).strip() or None
-        app.config['notify_webhook'] = str(notification_config.get('webhook', '')).strip() or None
-        
+        # 将 notification 配置存入 app.config
+        app.config['notification'] = notification_config
         # 使用列表推导式正确处理通知事件
         notify_events = {}
         for e_key in ['task.start', 'task.complete', 'task.error',  'komga.new']:
@@ -230,6 +305,15 @@ def check_config():
                 # 分割并去除空白，然后添加到列表中
                 notify_events[e_key] = [item.strip() for item in config_value.split(',') if item.strip()]
         app.config['notify_events'] = notify_events if notify_events else None
+        
+    # Openai 设置
+    openai_config = config_data.get('openai', {})
+    app.config['openai_api_key'] = str(openai_config.get('api_key', '')).strip()
+    app.config['openai_base_url'] = str(openai_config.get('base_url', '')).strip().rstrip('/')
+    app.config['openai_model'] = str(openai_config.get('model', '')).strip()
+    if app.config['openai_api_key'] and app.config['openai_base_url'] and app.config['openai_model']:
+        global_logger.info("OpenAI 配置已设置")
+        app.config['openai_toggle'] = True
 
 def get_eh_mode(config, mode):
     aria2 = config.get('aria2_toggle', False)
@@ -461,7 +545,28 @@ def parse_gmetadata(data):
         tags_list = [tag.strip() for tag in comicinfo['Tags'].split(', ')]
         matched = any(k.lower() == t.lower() for k in series_keywords for t in tags_list)
         if matched:
-            if comicinfo and comicinfo.get('Title'):
+            # 配置 OpenAI 后，首先尝试使用 AI 进行识别 
+            use_openai = app.config.get('openai_series_detection') and app.config.get('openai_toggle')
+            openai_success = False
+
+            if use_openai:
+                helper = OpenAIHelper(
+                    api_key=app.config.get('openai_api_key'),
+                    base_url=app.config.get('openai_base_url'),
+                    model=app.config.get('openai_model'),
+                    logger=global_logger
+                )
+                openai_result = helper.query(comicinfo['Title'])
+
+                # 检查返回是否有效且无错误
+                if openai_result and not openai_result.get('error') and openai_result.get('series'):
+                    comicinfo['AlternateSeries'] = openai_result.get('series')
+                    if openai_result.get('number'):
+                        comicinfo['Number'] = openai_result.get('number')
+                    openai_success = True
+            
+            # 如果 OpenAI 未被使用或调用失败，则回退到原始方法
+            if not openai_success:
                 comicinfo['AlternateSeries'] = extract_before_chapter(comicinfo['Title'])
     return comicinfo
 
@@ -641,7 +746,7 @@ def download_gallery_task(url, mode, task_id, logger=None):
         # 此处直接抛出异常，装饰器会捕获并发送失败通知
         raise ValueError(error_message)
     
-def task_failure_processing(task_id, logger, tasks_lock, tasks):
+def task_failure_processing(url, task_id, logger, tasks_lock, tasks):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -671,6 +776,7 @@ def task_failure_processing(task_id, logger, tasks_lock, tasks):
                     if app.config['notify_toggle'] and 'task.error' in app.config['notify_events']:
                         event_data = {
                             "task_id": task_id,
+                            "url": url,
                             "error": str(e)
                         }
                         notify(event="task.error", data=event_data, logger=logger, app_config=app.config)
@@ -689,7 +795,7 @@ def download_url():
     logger, log_buffer = get_task_logger(task_id)
     
     # 动态应用装饰器
-    decorated_download_task = task_failure_processing(task_id, logger, tasks_lock, tasks)(download_task)
+    decorated_download_task = task_failure_processing(url, task_id, logger, tasks_lock, tasks)(download_task)
     
     future = executor.submit(decorated_download_task, url, mode, task_id, logger)
     with tasks_lock:
@@ -1036,38 +1142,16 @@ def serve_vue_app(path):
         return send_from_directory(static_dir, 'index.html')
 
 if __name__ == '__main__':
-    # 初始化时加载配置，config.py 会自动处理文件创建
+    # 提前判断并设置调试模式，这对于防止 reloader 重复执行副作用至关重要
+    is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
+    debug_mode = not is_docker
+    app.debug = debug_mode
+
+    # 初始化时加载配置，确保端口号等信息在两个进程中都可用
     check_config()
     
     eh_translator = EhTagTranslator(enable_translation=app.config.get('tags_translation', True))
     
-    # 全局变量用于存储子进程对象
-    notification_process = None
-
-    # 如果 Komga 通知功能开启，启动 notification.py 子进程
-    # 检查是否是 Flask reloader 的主进程 (实际运行应用的代码的进程)，避免重复启动
-    # 当 debug=True 时，WERKZEUG_RUN_MAIN 为 'true' 的是实际运行应用的主进程，其他是 reloader 进程
-    if app.config.get('komga_toggle') and (not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true'):
-        try:
-            # 使用 sys.executable 确保使用与主进程相同的 Python 解释器
-            # 并且明确指定 notification.py 的相对路径，同时传递所需参数
-            komga_server = app.config.get('komga_server', '')
-            komga_username = app.config.get('komga_username', '')
-            komga_password = app.config.get('komga_password', '')
-            webhook_url = app.config.get('notify_webhook', '')
-
-            notification_process = subprocess.Popen([
-                sys.executable,
-                'src/notification.py',
-                '--komga_server', komga_server,
-                '--komga_username', komga_username,
-                '--komga_password', komga_password,
-                '--webhook_url', webhook_url
-            ])
-            global_logger.info(f"notification.py 已作为子进程启动, PID: {notification_process.pid}")
-        except Exception as e:
-            global_logger.error(f"启动 notification.py 失败: {e}")
-
     # 启动时迁移内存中的任务到数据库
     if tasks:
         global_logger.info("正在迁移内存中的任务到数据库...")
@@ -1096,23 +1180,9 @@ if __name__ == '__main__':
         global_logger.error(f"标记进行中任务失败时发生数据库错误: {e}")
 
     try:
-        # 在生产模式下，debug 应该设置为 False
-        # 检查是否在Docker容器中运行
-        is_docker = os.path.exists('/.dockerenv') or os.environ.get('DOCKER_CONTAINER', False)
-        debug_mode = not is_docker  # 在Docker中关闭debug模式
-        app.run(host='0.0.0.0', port=app.config['port'], debug=debug_mode)
+        # 使用已经计算好的 debug_mode 来运行应用
+        app.run(host='0.0.0.0', port=app.config['port'], debug=app.debug)
     finally:
         executor.shutdown()
         # 确保在主应用终止时关闭子进程
-        if notification_process and notification_process.poll() is None:
-            global_logger.info(f"正在终止 notification.py 子进程, PID: {notification_process.pid}")
-            notification_process.terminate()
-            try:
-                # 等待子进程终止，设置超时时间
-                notification_process.wait(timeout=5)
-                global_logger.info("notification.py 子进程已终止。")
-            except subprocess.TimeoutExpired:
-                global_logger.warning("notification.py 子进程在超时时间内未能终止，尝试强制终止。")
-                notification_process.kill()
-                notification_process.wait() # 再次等待，确保进程完全结束
-                global_logger.info("notification.py 子进程已强制终止。")
+        stop_notification_process()
