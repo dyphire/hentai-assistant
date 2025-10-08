@@ -491,7 +491,7 @@ def parse_eh_tags(tags):
     return comicinfo
 
 # 解析来自 E-Hentai 或 nhentai API 的画廊信息
-def parse_gmetadata(data):
+def parse_gmetadata(data, logger=None):
     comicinfo = {}
     # 直接使用传入 api 的 url 作为 Web 字段
     # 检查是否为 nhentai 数据（没有 token 字段）
@@ -545,7 +545,8 @@ def parse_gmetadata(data):
         tags_list = [tag.strip() for tag in comicinfo['Tags'].split(', ')]
         matched = any(k.lower() == t.lower() for k in series_keywords for t in tags_list)
         if matched:
-            # 配置 OpenAI 后，首先尝试使用 AI 进行识别 
+            # 配置 OpenAI 后，首先尝试使用 AI 进行识别
+            if logger: logger.info("正在为 multi-work series 作品系列名进行 AI 识别")
             use_openai = app.config.get('openai_series_detection') and app.config.get('openai_toggle')
             openai_success = False
 
@@ -560,6 +561,7 @@ def parse_gmetadata(data):
 
                 # 检查返回是否有效且无错误
                 if openai_result and not openai_result.get('error') and openai_result.get('series'):
+                    if logger: logger.info(f"AI 识别成功，结果: {openai_result}")
                     comicinfo['AlternateSeries'] = openai_result.get('series')
                     if openai_result.get('number'):
                         comicinfo['Number'] = openai_result.get('number')
@@ -728,7 +730,7 @@ def download_gallery_task(url, mode, task_id, logger=None):
     check_task_cancelled(task_id)
     
     
-    metadata = parse_gmetadata(gmetadata)
+    metadata = parse_gmetadata(gmetadata, logger)
     metadata['Web'] = url
     
     # 统一后处理
