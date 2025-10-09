@@ -128,7 +128,7 @@ oneshot=_oneshot
 ```
 
 
-### 4. ComicInfo 模板自定义
+### ComicInfo 模板自定义
 
 你可以通过修改 `config.ini` 文件中的 `[comicinfo]` 部分来自定义元数据模板，这会覆盖默认的生成样式。
 模板支持 Jinja2 语法，并提供了以下可用变量：
