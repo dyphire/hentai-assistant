@@ -104,7 +104,7 @@ keep_original_file=false
 tags_translation=false
 prefer_japanese_title=true
 remove_ads=false
-move_path=your_path/{author}/{series}/{filename}
+move_path=your_path/{{author}}/{{series}}/{{filename}}
 
 [ehentai]
 cookie="ipb_member_id=1234567; ipb_pass_hash=abcdef123456;"
@@ -127,6 +127,43 @@ library_id=
 oneshot=_oneshot
 ```
 
+
+### 4. ComicInfo 模板自定义
+
+你可以通过修改 `config.ini` 文件中的 `[comicinfo]` 部分来自定义元数据模板，这会覆盖默认的生成样式。
+模板支持 Jinja2 语法，并提供了以下可用变量：
+
+| 变量 | 说明 |
+| :--- | :--- |
+| `{{ filename }}` | 文件名 |
+| `{{ title }}` | 标题（移除了附加信息） |
+| `{{ originaltitle }}` | 未经处理的原始标题 |
+| `{{ writer }}` | 作者或社团名 |
+| `{{ penciller }}` | 画师 |
+| `{{ translator }}` | 汉化组或译者 |
+| `{{ genre }}` | 类型（通常为 `Hentai`，Non-H 分类除外） |
+| `{{ category }}` | E-Hentai 画廊分类 |
+| `{{ tags }}` | 标签 |
+| `{{ web }}` | 画廊链接 |
+| `{{ agerating }}` | 年龄分级（通常为 `18+`，Non-H 分类除外） |
+| `{{ manga }}` | 翻页顺序（通常为 `YesAndRightToLeft`，Webtoon 及 Artist CG 分类除外）|
+| `{{ languageiso }}` | 语言的 ISO 639-1 代码 |
+| `{{ series }}` | 系列名称 |
+
+
+#### 示例
+
+在标题后添加汉化组信息:
+```ini
+# 示例: [作者] 标题 [汉化组]
+Title = {{ originaltitle }}{% if translator %} [{{ translator }}]{% endif %}
+```
+
+在流派后追加画廊分类:
+```ini
+# 示例: Hentai, Doujinshi
+Genre = {{ genre }}{% if category %}, {{ category }}{% endif %}
+```
 ## API接口
 
 ### 下载接口

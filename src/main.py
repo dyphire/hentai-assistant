@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import subprocess # 导入 subprocess 模块
 import sys # 导入 sys 模块
 import functools
+import jinja2
 
 
 from flask import Flask, request, redirect, send_from_directory, Response
@@ -21,15 +22,17 @@ from providers import aria2
 from providers import ehentai
 from providers import nhentai
 from providers.ehtranslator import EhTagTranslator
-from utils import check_dirs, is_valid_zip, parse_filename, TaskStatus
+from utils import check_dirs, is_valid_zip, TaskStatus
 from notification import notify
 import cbztool
 from database import task_db
 from config import load_config, save_config
-from openai_helper import OpenAIHelper
+from metadata_extractor import MetadataExtractor
 
 # 全局变量用于存储子进程对象
 notification_process = None
+eh_translator = None
+metadata_extractor = None
 
 def start_notification_process():
     """启动 notification.py 子进程"""
@@ -166,7 +169,7 @@ def get_task_logger(task_id):
 
 def check_config():
     """检查并加载应用配置，并根据配置变化管理通知子进程。"""
-    global notification_process
+    global notification_process, eh_translator, metadata_extractor
     TRUE_VALUES = {'true', 'enable', '1', 'yes', 'on'}
     config_data = load_config()
 
@@ -185,7 +188,6 @@ def check_config():
     advanced = config_data.get('advanced', {})
     app.config['tags_translation'] = str(advanced.get('tags_translation', 'false')).lower() in TRUE_VALUES
     app.config['remove_ads'] = str(advanced.get('remove_ads', 'false')).lower() in TRUE_VALUES
-    app.config['ehentai_genre'] = str(advanced.get('ehentai_genre', 'false')).lower() in TRUE_VALUES
     app.config['aggressive_series_detection'] = str(advanced.get('aggressive_series_detection', 'false')).lower() in TRUE_VALUES
     app.config['openai_series_detection'] = str(advanced.get('openai_series_detection', 'false')).lower() in TRUE_VALUES
 
@@ -314,6 +316,12 @@ def check_config():
     if app.config['openai_api_key'] and app.config['openai_base_url'] and app.config['openai_model']:
         global_logger.info("OpenAI 配置已设置")
         app.config['openai_toggle'] = True
+    
+    # ComicInfo 设置
+    app.config['comicinfo'] = config_data.get('comicinfo', {})
+
+    eh_translator = EhTagTranslator(enable_translation=app.config.get('tags_translation', True))
+    metadata_extractor = MetadataExtractor(app.config, eh_translator)
 
 def get_eh_mode(config, mode):
     aria2 = config.get('aria2_toggle', False)
@@ -368,209 +376,9 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
         if logger: logger.info(f"下载完成: {local_file_path}")
     return local_file_path
 
+
 def sanitize_filename(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', s)
-
-def normalize_tilde(filename: str) -> str:
-    filename = re.sub(r'([话話])(?!\s)', r'\1 ', filename)
-    filename = re.sub(r'([~⁓～—_「-])', ' ', filename)
-    return filename
-
-def clean_name(title):
-    name = re.sub(r'[\s\-—_:：•·․,，。\'’?？!！~⁓～]+$', '', title)
-    return name.strip()
-
-def extract_before_chapter(filename):
-    patterns = [
-        # 1 中文/阿拉伯数字
-        r'(.*?)第?\s*[一二三四五六七八九十\d]+\s*[卷巻话話回迴編篇章册冊席期辑輯节節部]',
-        # 2. 数字在前，关键字在后
-        r'(.*?)\d+\s*[卷巻话話回迴編篇章册冊席期辑輯节節部]',
-        # 3. 关键字在前，数字在后
-        r'(.*?)[卷巻回迴編篇章册冊席期辑輯节節部]\s*[一二三四五六七八九十\d]+',
-        # 4. Vol/Vol./vol/v/V + 数字
-        r'(.*?)\s*(?:vol|v|#|＃)[\s\.]*\d+',
-        # 5. 圆方括号+数字
-        r'(.*?)\s*[\[\(（]\d+[\]\)）]\s*$',
-        # 6. 上中下前后
-        r'^(.*?)(?:[上中下前后後](?:編|回)|[上中下前后後]\s*$)',
-        # 7. 纯数字
-        r'(.*?)\s*\d+(\s|$)',
-    ]
-
-    filename = normalize_tilde(filename)
-    for pat in patterns:
-        m = re.search(pat, filename, re.I)
-        if m:
-            return clean_name(m.group(1)).strip()
-    
-    # 如果没有匹配任何章节模式 → 返回第一个空格前的内容
-    is_aggressive_series_detection = app.config.get('aggressive_series_detection', False)
-    if is_aggressive_series_detection:
-        filename = filename.strip()
-        idx = filename.find(' ')
-        if idx == -1:
-            return  clean_name(filename).strip()
-        return clean_name(filename[:idx]).strip()
-
-def fill_field(comicinfo, field, tags, prefixes):
-    for prefix in prefixes:
-        values = []
-        for t in tags:
-            if t.startswith(f"{prefix}:"):
-                name = t[len(prefix)+1:]
-                name = eh_translator.get_translation(name, prefix)
-                values.append(name)
-        if values:
-            comicinfo[field] = ", ".join(values)
-            return
-
-def add_tag_to_front(comicinfo, new_tag: str):
-    new_tag = new_tag.strip().lower()
-    if not new_tag:
-        return
-    if 'Tags' in comicinfo and comicinfo['Tags']:
-        tags = [t.strip() for t in comicinfo['Tags'].split(',') if t.strip()]
-        if new_tag not in tags:
-            tags.insert(0, new_tag)
-        comicinfo['Tags'] = ', '.join(tags)
-    else:
-        comicinfo['Tags'] = new_tag
-
-def parse_eh_tags(tags):
-    comicinfo = {'AgeRating':'R18+'}
-    #char_list = []
-    tag_list = []
-    collectionlist = []
-    for tag in tags:
-        # 因为 komga 这样软件并不支持 EH Tag 的 namespace，照搬会显得很别扭，所以这里会像 nhentai 那样，将一些 tag 的 namespace 去除
-        matchTag = re.match(r'(.+?):(.*)',tag)
-        if matchTag:
-            namespace = matchTag.group(1).lower()
-            tag_name = matchTag.group(2).lower()
-            if namespace == 'language':
-                if tag_name not in ['translated', 'rewrite']:
-                    language_code = langcodes.find(tag_name).language
-                    if language_code:
-                        comicinfo['LanguageISO'] = language_code # 转换为BCP-47
-            elif namespace == 'parody':
-                # 提取 parody 内容至 SeriesGroup
-                if tag_name not in ['original', 'various']:
-                    #kanji_parody = ehentai.get_original_tag(tag_name) # 将提取到合集的 Tag 翻译为日文
-                    tag_name = eh_translator.get_translation(tag_name, namespace)
-                    tag_list.append(f"{namespace}:{tag_name}") #  此处保留 namespace，方便所有 parody 相关的 tag 能排序在一块
-                    #if not kanji_parody == None and not app.config.get('tags_translation', True):
-                    #    comicinfo['Genre'] = comicinfo['Genre'] + ', Parody'
-                    #    collectionlist.append(kanji_parody)
-                    #else:
-                    #    collectionlist.append(tag_name)
-            elif namespace in ['character']:
-                tag_name = eh_translator.get_translation(tag_name, namespace)
-                tag_list.append(f"{namespace}:{tag_name}") # 保留 namespace，理由同 parody
-            elif namespace == 'female' or namespace == 'mixed' or namespace == 'location':
-                tag_name = eh_translator.get_translation(tag_name, namespace)
-                tag_list.append(tag_name) # 去掉 namespace, 仅保留内容
-            elif namespace == 'male': # male 与 female 存在相同的标签, 但它们在作品中表达的含义是不同的, 为了减少歧义，这里将会丢弃所有 male 相关的共同标签，但是保留 male 限定的标签
-                if tag_name in ehentai.male_only_taglist():
-                    tag_name = eh_translator.get_translation(tag_name, namespace)
-                    tag_list.append(tag_name)
-            elif namespace == 'other' or namespace == 'tag':
-                if tag_name not in ['extraneous ads',  'already uploaded', 'missing cover', 'forbidden content', 'replaced', 'compilation', 'incomplete', 'caption']:
-                    if namespace == 'tag':
-                        tag_name = eh_translator.get_translation(tag_name)
-                    else:
-                        tag_name = eh_translator.get_translation(tag_name, namespace)
-                    tag_list.append(tag_name)
-    # 进行以下去重
-    tag_list_sorted = sorted(set(tag_list), key=tag_list.index)
-    # 为 webtoon 以外的漫画指定翻页顺序
-    if not 'webtoon' in tag_list_sorted:
-        comicinfo['Manga'] = 'YesAndRightToLeft'
-    comicinfo['Tags'] = ', '.join(tag_list_sorted)
-    if not collectionlist == []: comicinfo['SeriesGroup'] = ', '.join(collectionlist)
-    return comicinfo
-
-# 解析来自 E-Hentai 或 nhentai API 的画廊信息
-def parse_gmetadata(data, logger=None):
-    comicinfo = {}
-    # 直接使用传入 api 的 url 作为 Web 字段
-    # 检查是否为 nhentai 数据（没有 token 字段）
-    #if 'token' not in data or data.get('token') == '':
-    #    # nhentai 数据
-    #    if 'gid' in data:
-    #        comicinfo['Web'] = f"https://nhentai.net/g/{data['gid']}/"
-    #else:
-    #    # ehentai 数据
-    #    comicinfo['Web'] = (
-    #        f"https://exhentai.org/g/{data['gid']}/{data['token']}/, "
-    #        f"https://e-hentai.org/g/{data['gid']}/{data['token']}/"
-    #    )
-    if 'tags' in data:
-        comicinfo.update(parse_eh_tags(data['tags']))
-    # 根据 ehentai_genre 设置决定是否将 Categories 作为 Genre 还是作为 Tag 使用
-    if not data['category'].lower() == 'non-h':
-        comicinfo['Genre'] = 'Hentai'
-    if data['category'].lower() not in ['manga', 'misc', 'asianporn', 'private']:
-        category = eh_translator.get_translation(data['category'], 'reclass')
-        if app.config['ehentai_genre']:
-            if 'Genre' in comicinfo:
-                comicinfo['Genre'] = comicinfo['Genre'] + ', ' + category
-            else:
-                comicinfo['Genre'] = category
-        else:
-            # 将 Categories 作为 Tags 至于最前方
-            add_tag_to_front(comicinfo, category)
-    # 从标题中提取作者信息
-    if app.config['prefer_japanese_title'] and not data['title_jpn'] == "":
-        text = html.unescape(data['title_jpn'])
-    else:
-        text = html.unescape(data['title'])
-    comic_market = re.search(r'\(C(\d+)\)', text)
-    if comic_market:
-       add_tag_to_front(comicinfo, f"c{comic_market.group(1)}")
-    if data['category'].lower() not in ['imageset']:
-        comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'] = parse_filename(text, eh_translator)
-    else:
-        comicinfo['Title'] = text
-
-    if comicinfo['Writer'] == None:
-        tags = data.get("tags", [])
-        fill_field(comicinfo, "Writer", tags, ["group", "artist"])
-    if comicinfo['Penciller'] == None:
-        tags = data.get("tags", [])
-        fill_field(comicinfo, "Penciller", tags, ["artist", "group"])
-    # 当 tags 中存在 multi-work series 时, 尝试为 AlternateSeries 字段赋值
-    series_keywords = ["multi-work series", "系列作品"]
-    if comicinfo and comicinfo.get('Tags'):
-        tags_list = [tag.strip() for tag in comicinfo['Tags'].split(', ')]
-        matched = any(k.lower() == t.lower() for k in series_keywords for t in tags_list)
-        if matched:
-            # 配置 OpenAI 后，首先尝试使用 AI 进行识别
-            if logger: logger.info("正在为 multi-work series 作品系列名进行 AI 识别")
-            use_openai = app.config.get('openai_series_detection') and app.config.get('openai_toggle')
-            openai_success = False
-
-            if use_openai:
-                helper = OpenAIHelper(
-                    api_key=app.config.get('openai_api_key'),
-                    base_url=app.config.get('openai_base_url'),
-                    model=app.config.get('openai_model'),
-                    logger=global_logger
-                )
-                openai_result = helper.query(comicinfo['Title'])
-
-                # 检查返回是否有效且无错误
-                if openai_result and not openai_result.get('error') and openai_result.get('series'):
-                    if logger: logger.info(f"AI 识别成功，结果: {openai_result}")
-                    comicinfo['AlternateSeries'] = openai_result.get('series')
-                    if openai_result.get('number'):
-                        comicinfo['Number'] = openai_result.get('number')
-                    openai_success = True
-            
-            # 如果 OpenAI 未被使用或调用失败，则回退到原始方法
-            if not openai_success:
-                comicinfo['AlternateSeries'] = extract_before_chapter(comicinfo['Title'])
-    return comicinfo
 
 def check_task_cancelled(task_id):
     with tasks_lock:
@@ -606,21 +414,72 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
 
         # 创建 ComicInfo.xml 并转换为 CBZ
         if metadata.get('Writer') or metadata.get('Tags'):
-            author = metadata.get('Penciller') or metadata.get('Writer') or 'Other'
-            writer = metadata.get('Writer') or metadata.get('Penciller') or 'Other'
-            series = metadata.get('AlternateSeries') or app.config['komga_oneshot']
-            move_path = app.config.get('move_path') or os.path.dirname(dl)
-            move_file_path = move_path.format(**SafeDict({
-                'author': author,
-                'penciller': author,
-                'writer': writer,
-                'series': series,
-                'filename': os.path.basename(dl)
-                })
-            )
+            # 准备一个包含所有可用字段的字典，用于格式化
+            template_vars = {k.lower(): v for k, v in metadata.items()}
+            template_vars['filename'] = os.path.basename(dl)
+            
+            jinja_env = jinja2.Environment()
+
+            def render_template(template_string):
+                try:
+                    template = jinja_env.from_string(template_string)
+                    rendered_value = template.render(template_vars)
+                    # 如果渲染结果是空字符串，也当作 None 处理
+                    return rendered_value if rendered_value else None
+                except Exception as e:
+                    (logger.warning if logger else print)(f"Jinja2 模板渲染失败: {e}")
+                    # 任何渲染失败都直接返回 None
+                    return None
+
+            # 根据 comicinfo 配置生成新的 metadata
+            comicinfo_metadata = {}
+            comicinfo_config = app.config.get('comicinfo', {})
+            for key, value_template in comicinfo_config.items():
+                if isinstance(value_template, str) and value_template:
+                    formatted_value = render_template(value_template)
+                    # 只有当格式化后的值不是 None 时才添加
+                    if formatted_value is not None:
+                         comicinfo_metadata[key] = formatted_value
+            if logger: logger.info(f"生成的 ComicInfo 元数据: {comicinfo_metadata}")
+
+            # 用于渲染路径的变量无法接受 None 值，因此在 comicinfo_metadata 完成之后，再添加回退机制
+            template_vars['author'] = metadata.get('Penciller') or metadata.get('Writer') or None
+            template_vars['series'] = metadata.get('Series') or app.config.get('komga_oneshot') or None
+
+
+            move_path_template = app.config.get('move_path')
+            if move_path_template:
+                # 为移动路径创建一个特殊的、健壮的 Jinja2 环境
+                class UnknownUndefined(jinja2.Undefined):
+                    def __str__(self):
+                        return 'Unknown'
+                
+                def finalize_for_path(value):
+                    # 此函数处理值为 None 或 "" 的情况
+                    return value if value else 'Unknown'
+
+                jinja_env_for_path = jinja2.Environment(
+                    undefined=UnknownUndefined, # 处理不存在的键
+                    finalize=finalize_for_path     # 处理 None 或 "" 的值
+                )
+                
+                try:
+                    path_template = jinja_env_for_path.from_string(move_path_template)
+                    move_file_path = path_template.render(template_vars)
+                    # 关键检查：处理渲染结果为空（例如模板是""）的情况
+                    if not move_file_path:
+                        (logger.warning if logger else print)(f"移动路径模板渲染结果为空, 回退到默认目录")
+                        move_file_path = os.path.dirname(dl)
+                except Exception as e:
+                    (logger.warning if logger else print)(f"移动路径模板渲染失败: {e}, 回退到默认目录")
+                    move_file_path = os.path.dirname(dl)
+            else:
+                move_file_path = os.path.dirname(dl)
+
             if not os.path.basename(move_file_path).lower().endswith(('.zip', '.cbz')):
                 move_file_path = os.path.join(move_file_path, os.path.basename(dl))
-            cbz = cbztool.write_xml_to_zip(dl, metadata, app=app, logger=logger)
+
+            cbz = cbztool.write_xml_to_zip(dl, comicinfo_metadata, app=app, logger=logger)
             if cbz and is_valid_zip(cbz):
                 # 移动到指定目录（komga/lanraragi，可选）
                 move_file_path = os.path.splitext(move_file_path)[0] + '.cbz'
@@ -729,13 +588,14 @@ def download_gallery_task(url, mode, task_id, logger=None):
 
     check_task_cancelled(task_id)
     
-    
-    metadata = parse_gmetadata(gmetadata, logger)
+    # 处理元数据
+    metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
     metadata['Web'] = url
     
     # 统一后处理
     final_path = post_download_processing(dl, metadata, task_id, logger, is_nhentai=is_nhentai)
-
+    
+    # 验证处理结果
     if final_path and is_valid_zip(final_path):
         if logger: logger.info(f"Task {task_id} completed successfully.")
         with tasks_lock:
@@ -1152,7 +1012,6 @@ if __name__ == '__main__':
     # 初始化时加载配置，确保端口号等信息在两个进程中都可用
     check_config()
     
-    eh_translator = EhTagTranslator(enable_translation=app.config.get('tags_translation', True))
     
     # 启动时迁移内存中的任务到数据库
     if tasks:

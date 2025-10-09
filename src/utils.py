@@ -70,38 +70,7 @@ def extract_parody(text, translator):
         return parody_translated
     return None
 
-def parse_filename(text, translator):
-    # 去除所有括号内的内容, 将清理后的文本作为标题
-    title = re.sub(r'\[.*?\]|\(.*?\)', '', text).strip()
-    print(f'从文件名{text}中解析到 Title:', title)
-    # 提取同人志的原作信息
-    # parody = extract_parody(text, translator)
 
-    # 找到 title 在原始 text 中的起始位置
-    title_start = text.find(title)
-    # 截取 title 前的文本
-    before_title = text[:title_start]
-    # 匹配紧挨标题的前一个 [] 内的内容，在 EH 的命名规范中，它总是代表作者信息
-    search_author = re.search(r'\[([^\]]+)\]\s*$', before_title)
-
-    if not search_author == None:
-        search_writer = re.search(r'(.+?)\s*\((.+?)\)', search_author.group(1))
-        # 判断作者和画师
-        if not search_writer == None:
-            writer = search_writer.group(1) # 同人志的情况下，把社团视为 writer
-            penciller = search_writer.group(2) # 把该漫画的作者视为 penciller
-        else:
-            writer = penciller = search_author.group(1)
-        # 有时候也会在作者信息中著名原著作者, 尝试去分离信息, 并将原著作者与社团共同视为 writer
-        for s in [ '、', ',']:
-            if s in penciller:
-                writer = writer + ', ' + penciller.split(s)[0]
-                print('\nWriter:', writer)
-                penciller = penciller.split(s)[1]
-                print('Penciller:', penciller)
-        return title, writer, penciller
-    else:
-        return title, None, None
 
 def get_task_logger(task_id=None):
     MAX_UUID_LOG_FILES = 5
