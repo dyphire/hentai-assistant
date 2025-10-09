@@ -70,10 +70,12 @@ def parse_filename(text, translator):
         # 有时候也会在作者信息中著名原著作者, 尝试去分离信息, 并将原著作者与社团共同视为 writer
         for s in [ '、', ',']:
             if s in penciller:
-                writer = writer + ', ' + penciller.split(s)[0]
-                print('\nWriter:', writer)
-                penciller = penciller.split(s)[1]
-                print('Penciller:', penciller)
+                parts = penciller.split(s)
+                if len(parts) > 1:
+                    writer = writer + ', ' + parts[0]
+                    print('\nWriter:', writer)
+                    penciller = parts[1]
+                    print('Penciller:', penciller)
         return title, writer, penciller
     else:
         return title, None, None
@@ -107,6 +109,8 @@ class MetadataExtractor:
             if m:
                 return clean_name(m.group(1)).strip()
             
+    def get_series_for_multi_work_series(self, filename, logger=None):
+        filename = normalize_tilde(filename)
         # 如果配置了 OpenAI ，先尝试使用 AI 进行识别
         use_openai = self.config.get('openai_series_detection') and self.config.get('openai_toggle')
         
@@ -157,9 +161,9 @@ class MetadataExtractor:
                 tag_name = matchTag.group(2).lower()
                 if namespace == 'language':
                     if tag_name not in ['translated', 'rewrite']:
-                        language_code = langcodes.find(tag_name).language
-                        if language_code:
-                            comicinfo['LanguageISO'] = language_code
+                        lang_obj = langcodes.find(tag_name)
+                        if lang_obj:
+                            comicinfo['LanguageISO'] = lang_obj.language
                 elif namespace == 'parody':
                     if tag_name not in ['original', 'various']:
                         tag_name = self.translator.get_translation(tag_name, namespace)
@@ -194,22 +198,22 @@ class MetadataExtractor:
         if 'tags' in data:
             comicinfo.update(self.parse_eh_tags(data['tags']))
         
-        if not data['category'].lower() == 'non-h':
+        if not data.get('category', '').lower() == 'non-h':
             comicinfo['Genre'] = 'Hentai'
-        if data['category'].lower() not in ['manga', 'misc', 'asianporn', 'private']:
-            comicinfo['category'] = self.translator.get_translation(data['category'], 'reclass')
+        if data.get('category', '').lower() not in ['manga', 'misc', 'asianporn', 'private']:
+            comicinfo['category'] = self.translator.get_translation(data.get('category', ''), 'reclass')
         
         if self.config['prefer_japanese_title'] and data.get('title_jpn'):
             text = html.unescape(data['title_jpn'])
         else:
-            text = html.unescape(data['title'])
+            text = html.unescape(data.get('title', ''))
         comicinfo['OriginalTitle'] = text   
             
         comic_market = re.search(r'\(C(\d+)\)', text)
         if comic_market:
            add_tag_to_front(comicinfo, f"c{comic_market.group(1)}")
         
-        if data['category'].lower() not in ['imageset']:
+        if data.get('category', '').lower() not in ['imageset']:
             comicinfo['Title'], comicinfo['Writer'], comicinfo['Penciller'] = parse_filename(text, self.translator)
         else:
             comicinfo['Title'] = text
@@ -225,14 +229,17 @@ class MetadataExtractor:
         translator = find_translator(html.unescape(data['title']))
         if translator: comicinfo['Translator'] = translator
 
-        # 为 multi-work series 作品系列名进行识别
-        series_keywords = ["multi-work series", "系列作品"]
-        comicinfo['Series'] = None
-        if comicinfo and comicinfo.get('Tags'):
-            tags_list = [tag.strip().lower() for tag in comicinfo['Tags'].split(',')]
-            matched = any(k.lower() in tags_list for k in series_keywords)
-            if matched:
-                if logger: logger.info('即将为 Multi-work series 作品系列名进行识别')
-                comicinfo['Series'] = self.extract_before_chapter(comicinfo['Title'], logger)
+        # 尝试为一些具有系列特征的标题提取系列名
+        comicinfo['Series'] = self.extract_before_chapter(comicinfo['Title'], logger)
+        if not comicinfo.get('Series'):
+            # 为自带 multi-work series 标签的作品作进一步分析
+            series_keywords = ["multi-work series", "系列作品"]
+            comicinfo['Series'] = None
+            if comicinfo and comicinfo.get('Tags'):
+                tags_list = [tag.strip().lower() for tag in comicinfo['Tags'].split(',')]
+                matched = any(k.lower() in tags_list for k in series_keywords)
+                if matched:
+                    if logger: logger.info('即将为 Multi-work series 作品系列名进行识别')
+                    comicinfo['Series'] = self.get_series_for_multi_work_series(comicinfo['Title'], logger)
         
         return comicinfo
