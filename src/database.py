@@ -44,6 +44,14 @@ class TaskDatabase:
                 )
             ''')
 
+            # 创建 global 表
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS global (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            ''')
+
             # 检查已存在表的字段
             cursor = conn.execute("PRAGMA table_info(tasks)")
             columns = [row[1] for row in cursor.fetchall()]
@@ -233,6 +241,30 @@ class TaskDatabase:
                 print(f"Database error migrating tasks: {e}")
                 return False
 
+
+    def set_global_state(self, key: str, value: str) -> bool:
+        """设置全局状态值"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.execute('INSERT OR REPLACE INTO global (key, value) VALUES (?, ?)', (key, value))
+                    conn.commit()
+                return True
+            except sqlite3.Error as e:
+                print(f"Database error setting global state: {e}")
+                return False
+
+    def get_global_state(self, key: str) -> Optional[str]:
+        """获取全局状态值"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    cursor = conn.execute('SELECT value FROM global WHERE key = ?', (key,))
+                    row = cursor.fetchone()
+                    return row[0] if row else None
+            except sqlite3.Error as e:
+                print(f"Database error getting global state: {e}")
+                return None
 
 # 全局数据库实例
 task_db = TaskDatabase()

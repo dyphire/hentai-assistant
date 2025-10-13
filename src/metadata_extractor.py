@@ -112,14 +112,14 @@ class MetadataExtractor:
     def get_series_for_multi_work_series(self, filename, logger=None):
         filename = normalize_tilde(filename)
         # 如果配置了 OpenAI ，先尝试使用 AI 进行识别
-        use_openai = self.config.get('openai_series_detection') and self.config.get('openai_toggle')
+        use_openai = self.config.get('OPENAI_SERIES_DETECTION') and self.config.get('OPENAI_TOGGLE')
         
         if use_openai:
             if logger: logger.info("正在为无法识别章节号的文件名调用 OpenAI 进行识别...")
             helper = OpenAIHelper(
-                api_key=self.config.get('openai_api_key'),
-                base_url=self.config.get('openai_base_url'),
-                model=self.config.get('openai_model'),
+                api_key=self.config.get('OPENAI_API_KEY'),
+                base_url=self.config.get('OPENAI_BASE_URL'),
+                model=self.config.get('OPENAI_MODEL'),
                 logger=logger
             )
             openai_result = helper.query(filename)
@@ -130,7 +130,7 @@ class MetadataExtractor:
                 return openai_result.get('series')
         
         # 如果没有匹配任何章节模式 → 返回第一个空格前的内容
-        is_aggressive_series_detection = self.config.get('aggressive_series_detection', False)
+        is_aggressive_series_detection = self.config.get('AGGRESSIVE_SERIES_DETECTION', False)
         if is_aggressive_series_detection:
             filename = filename.strip()
             idx = filename.find(' ')
@@ -203,7 +203,7 @@ class MetadataExtractor:
         if data.get('category', '').lower() not in ['manga', 'misc', 'asianporn', 'private']:
             comicinfo['category'] = self.translator.get_translation(data.get('category', ''), 'reclass')
         
-        if self.config['prefer_japanese_title'] and data.get('title_jpn'):
+        if self.config.get('PREFER_JAPANESE_TITLE') and data.get('title_jpn'):
             text = html.unescape(data['title_jpn'])
         else:
             text = html.unescape(data.get('title', ''))

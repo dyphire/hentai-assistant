@@ -65,29 +65,32 @@ class EHentaiTools:
             response = self.session.get(url, allow_redirects=True, timeout=10)
             final_url = response.url.lower()
             valid = True
+            eh_funds = None
             if 'login' in final_url or (keyword and keyword not in final_url):
                 valid = False
                 if self.logger:
                     self.logger.error(error_msg)
             else:
+                if name == "E-Hentai":
+                    eh_funds = self.get_funds(response.text)
                 if self.logger:
                     self.logger.info(success_msg)
-            return valid
+            return valid, eh_funds
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"无法打开 {url}, 请检查网络: {e}")
-            return False
+            return None, None
 
     def is_valid_cookie(self):
         # 先检查 E-Hentai
-        eh_valid = self._check_url(
+        eh_valid, eh_funds = self._check_url(
             "https://e-hentai.org/home.php",
             "E-Hentai",
             "无法访问 https://e-hentai.org/home.php, Archive 下载功能将不可用",
             "成功访问 https://e-hentai.org/home.php, Archive 下载功能可用"
         )
         # 再检查 ExHentai
-        exh_valid = self._check_url(
+        exh_valid, _ = self._check_url(
             "https://exhentai.org/uconfig.php",
             "ExHentai",
             "无法访问 https://exhentai.org/uconfig.php, ExHentai 下载可能受限",
@@ -95,7 +98,33 @@ class EHentaiTools:
             keyword="uconfig"
         )
 
-        return eh_valid, exh_valid
+        return eh_valid, exh_valid, eh_funds
+
+    def get_funds(self, html_text):
+        soup = BeautifulSoup(html_text, 'html.parser')
+        h2_tag = soup.find('h2', string='Total GP Gained')
+        if h2_tag:
+            homebox_div = h2_tag.find_next_sibling('div', class_='homebox')
+            if homebox_div:
+                table = homebox_div.find('table')
+                if table:
+                    total_gp = 0
+                    # 遍历表格中的每一行
+                    for row in table.find_all('tr'):
+                        # GP 数值通常在每行的第一个 <td> 标签中
+                        td = row.find('td')
+                        if td:
+                            gp_text = td.get_text(strip=True)
+                            if gp_text:
+                                try:
+                                    # 移除逗号并转换为整数
+                                    total_gp += int(gp_text.replace(',', ''))
+                                except ValueError:
+                                    # 如果转换失败，可能不是数字，记录警告并跳过
+                                    if self.logger:
+                                        self.logger.warning(f"无法从 '{gp_text}' 中解析 GP 数值")
+                    return total_gp
+        return None
 
     # 从 E-Hentai API 获取画廊信息
     def get_gmetadata(self, url):
@@ -121,7 +150,7 @@ class EHentaiTools:
             if self.logger: self.logger.error(f'解析{url}时遇到了错误')
 
     def _download(self, url, path, task_id=None, tasks=None, tasks_lock=None):
-        eh_valid, exh_valid = self.is_valid_cookie()
+        eh_valid, exh_valid, _ = self.is_valid_cookie()
         if exh_valid:
             url = url.replace("e-hentai.org", "exhentai.org")
         else:
@@ -174,14 +203,19 @@ class EHentaiTools:
             return None
 
     def get_download_link(self, url, mode):
-        eh_valid, exh_valid = self.is_valid_cookie()
-        if exh_valid:
-            url = url.replace("e-hentai.org", "exhentai.org")
-        else:
-            url = url.replace("exhentai.org", "e-hentai.org")
         response = self.session.get(url)
         if response.status_code == 200:
             soup = BeautifulSoup(response.text, 'html.parser')
+            # 检查是否有内容警告
+            h1 = soup.find('h1')
+            if h1 and h1.text == 'Content Warning':
+                if self.logger: self.logger.info("检测到内容警告, 选择忽略并尝试重新加载")
+                response = self.session.get(url + '/?nw=always')
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                else:
+                    if self.logger: self.logger.error("添加 'nw=always' 参数后请求失败，请仔细排查问题")
+                    return None, None
             # 先看看 Torrent 情况
             if mode == "torrent" or mode == "both": # 下载种子需要开启 aria2
                 torrent_a_tag = soup.find("a", string=lambda text: text and "Torrent Download" in text,onclick=True)

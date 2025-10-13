@@ -32,8 +32,8 @@ def make_comicinfo_xml(metadata):
 def write_xml_to_zip(file_path, metadata, app=None, logger=None):
     zip_file_root = os.path.dirname(file_path)
     zip_file_name = os.path.basename(file_path)
-    copy = app and app.config.get('keep_original_file', False)
-    remove_ad_flag = app and app.config.get('remove_ads', False)
+    copy = app and app.config.get('KEEP_ORIGINAL_FILE', False)
+    remove_ad_flag = app and app.config.get('REMOVE_ADS', False)
 
     print(f"处理文件: {file_path}, 复制原文件: {copy}, 删除广告页: {remove_ad_flag}")
     if logger:

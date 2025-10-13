@@ -167,6 +167,15 @@ def get_task_logger(task_id):
 
     return logger, log_buffer
 
+def update_eh_funds(eh_funds):
+    """更新 eh_funds 到 app.config 和数据库"""
+    if eh_funds is not None:
+        # 始终将 eh_funds 构造成字典以提高可扩展性
+        eh_funds_dict = {'GP': eh_funds}
+        app.config['EH_FUNDS'] = eh_funds_dict
+        task_db.set_global_state('eh_funds', json.dumps(eh_funds_dict))
+        global_logger.info(f"E-Hentai GP 余额已更新: {eh_funds_dict['GP']}")
+
 def check_config():
     """检查并加载应用配置，并根据配置变化管理通知子进程。"""
     global notification_process, eh_translator, metadata_extractor
@@ -174,50 +183,56 @@ def check_config():
     config_data = load_config()
 
     # 记录 Komga 的旧状态
-    was_komga_enabled = app.config.get('komga_toggle', False)
+    was_komga_enabled = app.config.get('KOMGA_TOGGLE', False)
     
+    # 将配置数据更新到 app.config
+    app.config.update(config_data)
+
     # 通用设置
-    general = config_data.get('general', {})
-    app.config['port'] = int(general.get('port', 5001))
-    app.config['download_torrent'] = str(general.get('download_torrent', 'false')).lower() in TRUE_VALUES
-    app.config['keep_torrents'] = str(general.get('keep_torrents', 'false')).lower() in TRUE_VALUES
-    app.config['keep_original_file'] = str(general.get('keep_original_file', 'false')).lower() in TRUE_VALUES
-    app.config['prefer_japanese_title'] = str(general.get('prefer_japanese_title', 'true')).lower() in TRUE_VALUES
-    app.config['move_path'] = str(general.get('move_path', '')).rstrip('/') or None
+    general = config_data.get('GENERAL', {})
+    app.config['PORT'] = int(general.get('PORT', 5001))
+    app.config['DOWNLOAD_TORRENT'] = str(general.get('DOWNLOAD_TORRENT', 'false')).lower() in TRUE_VALUES
+    app.config['KEEP_TORRENTS'] = str(general.get('KEEP_TORRENTS', 'false')).lower() in TRUE_VALUES
+    app.config['KEEP_ORIGINAL_FILE'] = str(general.get('KEEP_ORIGINAL_FILE', 'false')).lower() in TRUE_VALUES
+    app.config['PREFER_JAPANESE_TITLE'] = str(general.get('PREFER_JAPANESE_TITLE', 'true')).lower() in TRUE_VALUES
+    app.config['MOVE_PATH'] = str(general.get('MOVE_PATH', '')).rstrip('/') or None
     
-    advanced = config_data.get('advanced', {})
-    app.config['tags_translation'] = str(advanced.get('tags_translation', 'false')).lower() in TRUE_VALUES
-    app.config['remove_ads'] = str(advanced.get('remove_ads', 'false')).lower() in TRUE_VALUES
-    app.config['aggressive_series_detection'] = str(advanced.get('aggressive_series_detection', 'false')).lower() in TRUE_VALUES
-    app.config['openai_series_detection'] = str(advanced.get('openai_series_detection', 'false')).lower() in TRUE_VALUES
+    advanced = config_data.get('ADVANCED', {})
+    app.config['TAGS_TRANSLATION'] = str(advanced.get('TAGS_TRANSLATION', 'false')).lower() in TRUE_VALUES
+    app.config['REMOVE_ADS'] = str(advanced.get('REMOVE_ADS', 'false')).lower() in TRUE_VALUES
+    app.config['AGGRESSIVE_SERIES_DETECTION'] = str(advanced.get('AGGRESSIVE_SERIES_DETECTION', 'false')).lower() in TRUE_VALUES
+    app.config['OPENAI_SERIES_DETECTION'] = str(advanced.get('OPENAI_SERIES_DETECTION', 'false')).lower() in TRUE_VALUES
 
     # E-Hentai 设置
-    ehentai_config = config_data.get('ehentai', {})
-    cookie = ehentai_config.get('cookie', '')
-    app.config['eh_cookie'] = {"cookie": cookie} if cookie else {"cookie": ""}
+    ehentai_config = config_data.get('EHENTAI', {})
+    cookie = ehentai_config.get('COOKIE', '')
+    app.config['EH_COOKIE'] = {"cookie": cookie} if cookie else {"cookie": ""}
 
     # nhentai 设置
-    nhentai_config = config_data.get('nhentai', {})
-    nhentai_cookie = nhentai_config.get('cookie', '')
-    app.config['nhentai_cookie'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
+    nhentai_config = config_data.get('NHENTAI', {})
+    nhentai_cookie = nhentai_config.get('COOKIE', '')
+    app.config['NHENTAI_COOKIE'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
 
-    eh = ehentai.EHentaiTools(cookie=app.config['eh_cookie'], logger=global_logger)
-    nh = nhentai.NHentaiTools(cookie=app.config['nhentai_cookie'], logger=global_logger)
-    hath_toggle = eh.is_valid_cookie()
+    eh = ehentai.EHentaiTools(cookie=app.config['EH_COOKIE'], logger=global_logger)
+    nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)
+    eh_valid, exh_valid, eh_funds = eh.is_valid_cookie()
+    print(eh_valid, exh_valid)
+    hath_toggle = (eh_valid, exh_valid)
+    update_eh_funds(eh_funds)
     nh_toggle = nh.is_valid_cookie()
 
     # Aria2 RPC 设置
-    aria2_config = config_data.get('aria2', {})
-    aria2_enable = str(aria2_config.get('enable', 'false')).lower() in TRUE_VALUES
+    aria2_config = config_data.get('ARIA2', {})
+    aria2_enable = str(aria2_config.get('ENABLE', 'false')).lower() in TRUE_VALUES
 
     if aria2_enable:
         global_logger.info("开始测试 Aria2 RPC 的连接")
-        app.config['aria2_server'] = str(aria2_config.get('server', '')).rstrip('/')
-        app.config['aria2_token'] = str(aria2_config.get('token', ''))
-        app.config['aria2_download_dir'] = str(aria2_config.get('download_dir', '')).rstrip('/') or None
-        app.config['real_download_dir'] = str(aria2_config.get('mapped_dir', '')).rstrip('/') or app.config['aria2_download_dir']
+        app.config['ARIA2_SERVER'] = str(aria2_config.get('SERVER', '')).rstrip('/')
+        app.config['ARIA2_TOKEN'] = str(aria2_config.get('TOKEN', ''))
+        app.config['ARIA2_DOWNLOAD_DIR'] = str(aria2_config.get('DOWNLOAD_DIR', '')).rstrip('/') or None
+        app.config['REAL_DOWNLOAD_DIR'] = str(aria2_config.get('MAPPED_DIR', '')).rstrip('/') or app.config['ARIA2_DOWNLOAD_DIR']
 
-        rpc = aria2.Aria2RPC(url=app.config['aria2_server'], token=app.config['aria2_token'], logger=global_logger)
+        rpc = aria2.Aria2RPC(url=app.config['ARIA2_SERVER'], token=app.config['ARIA2_TOKEN'], logger=global_logger)
         try:
             result = rpc.get_global_stat()
             if 'result' in result:
@@ -234,20 +249,20 @@ def check_config():
         aria2_toggle = False
 
     # Komga API 设置
-    komga_config = config_data.get('komga', {})
-    komga_enable = str(komga_config.get('enable', 'false')).lower() in TRUE_VALUES
-    app.config['komga_oneshot'] = str(komga_config.get('oneshot', '_oneshot'))
+    komga_config = config_data.get('KOMGA', {})
+    komga_enable = str(komga_config.get('ENABLE', 'false')).lower() in TRUE_VALUES
+    app.config['KOMGA_ONESHOT'] = str(komga_config.get('ONESHOT', '_oneshot'))
 
     if komga_enable:
         global_logger.info("开始测试 Komga API 的连接")
-        app.config['komga_server'] = str(komga_config.get('server', '')).rstrip('/')
-        app.config['komga_username'] = str(komga_config.get('username', ''))
-        app.config['komga_password'] = str(komga_config.get('password', ''))
-        app.config['komga_library_id'] = str(komga_config.get('library_id', ''))
+        app.config['KOMGA_SERVER'] = str(komga_config.get('SERVER', '')).rstrip('/')
+        app.config['KOMGA_USERNAME'] = str(komga_config.get('USERNAME', ''))
+        app.config['KOMGA_PASSWORD'] = str(komga_config.get('PASSWORD', ''))
+        app.config['KOMGA_LIBRARY_ID'] = str(komga_config.get('LIBRARY_ID', ''))
 
-        kmg = komga.KomgaAPI(server=app.config['komga_server'], username=app.config['komga_username'], password=app.config['komga_password'],  logger=global_logger)
+        kmg = komga.KomgaAPI(server=app.config['KOMGA_SERVER'], username=app.config['KOMGA_USERNAME'], password=app.config['KOMGA_PASSWORD'],  logger=global_logger)
         try:
-            library = kmg.get_libraries(library_id=app.config['komga_library_id'])
+            library = kmg.get_libraries(library_id=app.config['KOMGA_LIBRARY_ID'])
             if library.status_code == 200:
                 global_logger.info("Komga API 连接成功")
                 komga_toggle = True
@@ -266,7 +281,7 @@ def check_config():
     # 只有在主工作进程中才管理子进程的生命周期，以避免 reloader 重复启动
     if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true':
         # 检查此函数是否由 API 更新触发
-        is_config_update = app.config.get('checking_config', False)
+        is_config_update = app.config.get('CHECKING_CONFIG', False)
 
         if not is_komga_enabled:
             # 如果 Komga 被禁用，确保监听器是停止的
@@ -285,48 +300,55 @@ def check_config():
                 stop_notification_process()
                 start_notification_process()
 
-    app.config['hath_toggle'] = hath_toggle
-    app.config['nh_toggle'] = nh_toggle
-    app.config['aria2_toggle'] = aria2_toggle
-    app.config['komga_toggle'] = komga_toggle
-    app.config['checking_config'] = False
+    app.config['HATH_TOGGLE'] = hath_toggle
+    app.config['NH_TOGGLE'] = nh_toggle
+    app.config['ARIA2_TOGGLE'] = aria2_toggle
+    app.config['KOMGA_TOGGLE'] = komga_toggle
+    app.config['CHECKING_CONFIG'] = False
 
     # 通知设置
-    notification_config = config_data.get('notification', {})
-    notification_enable = str(notification_config.get('enable', 'false')).lower() in TRUE_VALUES
+    notification_config = config_data.get('NOTIFICATION', {})
+    notification_enable = str(notification_config.get('ENABLE', 'false')).lower() in TRUE_VALUES
     if notification_enable:
         global_logger.info("通知服务功能已启用")
-        app.config['notify_toggle'] = True
-        # 将 notification 配置存入 app.config
-        app.config['notification'] = notification_config
+        app.config['NOTIFY_TOGGLE'] = True
         # 使用列表推导式正确处理通知事件
         notify_events = {}
-        for e_key in ['task.start', 'task.complete', 'task.error',  'komga.new']:
-            config_value = notification_config.get(e_key, '').strip()
+        for e_key in ['TASK.START', 'TASK.COMPLETE', 'TASK.ERROR',  'KOMGA.NEW']:
+            config_value = notification_config.get(e_key.upper(), '').strip()
             if config_value:
                 # 分割并去除空白，然后添加到列表中
                 notify_events[e_key] = [item.strip() for item in config_value.split(',') if item.strip()]
-        app.config['notify_events'] = notify_events if notify_events else None
+        app.config['NOTIFY_EVENTS'] = notify_events if notify_events else None
         
     # Openai 设置
-    openai_config = config_data.get('openai', {})
-    app.config['openai_api_key'] = str(openai_config.get('api_key', '')).strip()
-    app.config['openai_base_url'] = str(openai_config.get('base_url', '')).strip().rstrip('/')
-    app.config['openai_model'] = str(openai_config.get('model', '')).strip()
-    if app.config['openai_api_key'] and app.config['openai_base_url'] and app.config['openai_model']:
+    openai_config = config_data.get('OPENAI', {})
+    app.config['OPENAI_API_KEY'] = str(openai_config.get('API_KEY', '')).strip()
+    app.config['OPENAI_BASE_URL'] = str(openai_config.get('BASE_URL', '')).strip().rstrip('/')
+    app.config['OPENAI_MODEL'] = str(openai_config.get('MODEL', '')).strip()
+    if app.config['OPENAI_API_KEY'] and app.config['OPENAI_BASE_URL'] and app.config['OPENAI_MODEL']:
         global_logger.info("OpenAI 配置已设置")
-        app.config['openai_toggle'] = True
+        app.config['OPENAI_TOGGLE'] = True
     
     # ComicInfo 设置
-    app.config['comicinfo'] = config_data.get('comicinfo', {})
+    app.config['COMICINFO'] = config_data.get('COMICINFO', {})
 
-    eh_translator = EhTagTranslator(enable_translation=app.config.get('tags_translation', True))
+    eh_translator = EhTagTranslator(enable_translation=app.config.get('TAGS_TRANSLATION', True))
     metadata_extractor = MetadataExtractor(app.config, eh_translator)
 
+    # 从数据库加载 eh_funds
+    eh_funds_json = task_db.get_global_state('eh_funds')
+    if eh_funds_json:
+        try:
+            app.config['EH_FUNDS'] = json.loads(eh_funds_json)
+            global_logger.debug(f"从数据库加载 eh_funds: {app.config['EH_FUNDS']}")
+        except json.JSONDecodeError:
+            global_logger.error("从数据库加载 eh_funds 失败：无效的 JSON 格式")
+
 def get_eh_mode(config, mode):
-    aria2 = config.get('aria2_toggle', False)
-    hath = config.get('hath_toggle', False)
-    download_torrent = mode in ("torrent", "1") if mode else config.get('download_torrent', True)
+    aria2 = config.get('ARIA2_TOGGLE', False)
+    hath = config.get('HATH_TOGGLE', False)
+    download_torrent = mode in ("torrent", "1") if mode else config.get('DOWNLOAD_TORRENT', True)
     if hath and not aria2:
         return "archive"
     if aria2 and download_torrent:
@@ -343,13 +365,13 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
     if task_id:
         check_task_cancelled(task_id)
 
-    rpc = aria2.Aria2RPC(app.config['aria2_server'], app.config['aria2_token'])
+    rpc = aria2.Aria2RPC(app.config['ARIA2_SERVER'], app.config['ARIA2_TOKEN'])
     if url != None:
         result = rpc.add_uri(url, dir=dir, out=out)
         if logger: logger.info(result)
     elif torrent != None:
         result = rpc.add_torrent(torrent, dir=dir, out=out)
-        if not app.config['keep_torrents'] == True:
+        if not app.config['KEEP_TORRENTS'] == True:
             os.remove(torrent)
         if logger: logger.info(result)
     gid = result['result']
@@ -366,9 +388,9 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
     else:
         filename = os.path.basename(file)
         if filename.lower().endswith(('.zip', '.cbz')):
-            local_file_path = os.path.join(app.config['real_download_dir'], filename)
+            local_file_path = os.path.join(app.config['REAL_DOWNLOAD_DIR'], filename)
         else:
-            local_file_path = os.path.join(app.config['real_download_dir'], os.path.basename(os.path.dirname(file)))
+            local_file_path = os.path.join(app.config['REAL_DOWNLOAD_DIR'], os.path.basename(os.path.dirname(file)))
 
     # 完成下载后, 为压缩包添加元数据
     if os.path.exists(file):
@@ -396,13 +418,13 @@ def download_task(url, mode, task_id, logger=None):
     result = download_gallery_task(url, mode, task_id, logger=logger)
     
     # 任务完成通知仍然在此处处理
-    if app.config['notify_toggle'] and 'task.complete' in app.config['notify_events']:
+    if app.config.get('NOTIFY_TOGGLE') and 'TASK.COMPLETE' in app.config.get('NOTIFY_EVENTS', {}):
         event_data = {
             "url": url,
             "task_id": task_id,
             "metadata": result,
             }
-        notify(event="task.complete", data=event_data, logger=logger, app_config=app.config)
+        notify(event="TASK.COMPLETE", data=event_data, logger=logger, app_config=app.config)
 
 def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=False):
     try:
@@ -433,7 +455,7 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
 
             # 根据 comicinfo 配置生成新的 metadata
             comicinfo_metadata = {}
-            comicinfo_config = app.config.get('comicinfo', {})
+            comicinfo_config = app.config.get('COMICINFO', {})
             for key, value_template in comicinfo_config.items():
                 if isinstance(value_template, str) and value_template:
                     formatted_value = render_template(value_template)
@@ -444,10 +466,10 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
 
             # 用于渲染路径的变量无法接受 None 值，因此在 comicinfo_metadata 完成之后，再添加回退机制
             template_vars['author'] = metadata.get('Penciller') or metadata.get('Writer') or None
-            template_vars['series'] = metadata.get('Series') or app.config.get('komga_oneshot') or None
+            template_vars['series'] = metadata.get('Series') or app.config.get('KOMGA_ONESHOT') or None
 
 
-            move_path_template = app.config.get('move_path')
+            move_path_template = app.config.get('MOVE_PATH')
             if move_path_template:
                 # 为移动路径创建一个特殊的、健壮的 Jinja2 环境
                 class UnknownUndefined(jinja2.Undefined):
@@ -494,11 +516,11 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
         check_task_cancelled(task_id)
 
         # 触发 Komga 媒体库入库扫描
-        if app.config['komga_toggle'] and is_valid_zip(dl):
-            if app.config['komga_library_id']:
-                kmg = komga.KomgaAPI(server=app.config['komga_server'], username=app.config['komga_username'], password=app.config['komga_password'], logger=logger)
-                if app.config['komga_library_id']:
-                    kmg.scan_library(app.config['komga_library_id'])
+        if app.config['KOMGA_TOGGLE'] and is_valid_zip(dl):
+            if app.config['KOMGA_LIBRARY_ID']:
+                kmg = komga.KomgaAPI(server=app.config['KOMGA_SERVER'], username=app.config['KOMGA_USERNAME'], password=app.config['KOMGA_PASSWORD'], logger=logger)
+                if app.config['KOMGA_LIBRARY_ID']:
+                    kmg.scan_library(app.config['KOMGA_LIBRARY_ID'])
 
         return dl
 
@@ -514,22 +536,22 @@ def download_gallery_task(url, mode, task_id, logger=None):
     is_nhentai = 'nhentai.net' in url
 
     if is_nhentai:
-        gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('nhentai_cookie'), logger=logger)
+        gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('NHENTAI_COOKIE'), logger=logger)
     else:
-        gallery_tool = ehentai.EHentaiTools(cookie=app.config.get('eh_cookie'), logger=logger)
+        gallery_tool = ehentai.EHentaiTools(cookie=app.config.get('EH_COOKIE'), logger=logger)
 
     # 获取画廊元数据
     gmetadata = gallery_tool.get_gmetadata(url)
     
     # 在获得 gmetadata 后，触发 task.start 事件
-    if app.config['notify_toggle'] and 'task.start' in app.config['notify_events']:
+    if app.config.get('NOTIFY_TOGGLE') and 'TASK.START' in app.config.get('NOTIFY_EVENTS', {}):
         if logger: logger.info("发送 task.start 通知")
         event_data = {
             "url": url,
             "task_id": task_id,
             "gmetadata": gmetadata,
         }
-        notify(event="task.start", data=event_data, logger=logger, app_config=app.config)
+        notify(event="TASK.START", data=event_data, logger=logger, app_config=app.config)
     
     if not gmetadata or 'gid' not in gmetadata:
         raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
@@ -563,19 +585,25 @@ def download_gallery_task(url, mode, task_id, logger=None):
     else:
         # ehentai 下载模式选择
         eh_mode = get_eh_mode(app.config, mode)
+        # exhentai 限定的画廊在一些情况下能被 e-hentai 检索，但并不能通过 e-hentai 访问，因此当 exhentai 可用时，积极替换成 exhentai 的链接。
+        eh_valid, exh_valid, eh_funds = gallery_tool.is_valid_cookie()
+        if exh_valid: url = url.replace("e-hentai.org", "exhentai.org")
+        else: url = url.replace("exhentai.org", "e-hentai.org")     
+        # 顺便更新 GP 余额
+        update_eh_funds(eh_funds)
         result = gallery_tool.get_download_link(url=url, mode=eh_mode)
 
         check_task_cancelled(task_id)
 
         if result:
             if result[0] == 'torrent':
-                dl = send_to_aria2(torrent=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
+                dl = send_to_aria2(torrent=result[1], dir=app.config['ARIA2_DOWNLOAD_DIR'], out=filename, logger=logger, task_id=task_id)
                 if dl is None:
                     # 死种尝试 archive
                     result = gallery_tool.get_download_link(url=url, mode='archive')
-                    dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
+                    dl = send_to_aria2(url=result[1], dir=app.config['ARIA2_DOWNLOAD_DIR'], out=filename, logger=logger, task_id=task_id)
             elif result[0] == 'archive':
-                if not app.config['aria2_toggle']:
+                if not app.config['ARIA2_TOGGLE']:
                     dl = gallery_tool._download(
                         url=result[1],
                         path=path,
@@ -584,7 +612,7 @@ def download_gallery_task(url, mode, task_id, logger=None):
                         tasks_lock=tasks_lock
                     )
                 else:
-                    dl = send_to_aria2(url=result[1], dir=app.config['aria2_download_dir'], out=filename, logger=logger, task_id=task_id)
+                    dl = send_to_aria2(url=result[1], dir=app.config['ARIA2_DOWNLOAD_DIR'], out=filename, logger=logger, task_id=task_id)
 
     check_task_cancelled(task_id)
     
@@ -635,13 +663,13 @@ def task_failure_processing(url, task_id, logger, tasks_lock, tasks):
                     task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
                     
                     # 在获得 gmetadata 后，触发 task.start 事件
-                    if app.config['notify_toggle'] and 'task.error' in app.config['notify_events']:
+                    if app.config.get('NOTIFY_TOGGLE') and 'TASK.ERROR' in app.config.get('NOTIFY_EVENTS', {}):
                         event_data = {
                             "task_id": task_id,
                             "url": url,
                             "error": str(e)
                         }
-                        notify(event="task.error", data=event_data, logger=logger, app_config=app.config)
+                        notify(event="TASK.ERROR", data=event_data, logger=logger, app_config=app.config)
                 raise e
         return wrapper
     return decorator
@@ -782,10 +810,13 @@ def get_config():
 
     # 添加状态信息
     config_data['status'] = {
-        'hath_toggle': bool(app.config.get('hath_toggle', False)),
-        'nh_toggle': bool(app.config.get('nh_toggle', False)),
-        'aria2_toggle': bool(app.config.get('aria2_toggle', False)),
-        'komga_toggle': bool(app.config.get('komga_toggle', False)),
+        'hath_toggle': app.config.get('HATH_TOGGLE', (False, False)),
+        'nh_toggle': app.config.get('NH_TOGGLE'),
+        'aria2_toggle': app.config.get('ARIA2_TOGGLE', False),
+        'komga_toggle': app.config.get('KOMGA_TOGGLE', False),
+        'notification_toggle': notification_process is not None and notification_process.poll() is None,
+        'notification_pid': notification_process.pid if notification_process and notification_process.poll() is None else None,
+        'eh_funds': app.config.get('EH_FUNDS', {'GP': '-'})
     }
     return json_response(config_data)
 
@@ -800,7 +831,7 @@ def update_config():
     except Exception as e:
         return json_response({'error': f'Failed to save config: {e}'}), 500
 
-    app.config['checking_config'] = True
+    app.config['CHECKING_CONFIG'] = True
     executor.submit(check_config)
     return json_response({'message': 'Config updated successfully', 'status_check_started': True}), 200
 
@@ -1042,7 +1073,7 @@ if __name__ == '__main__':
 
     try:
         # 使用已经计算好的 debug_mode 来运行应用
-        app.run(host='0.0.0.0', port=app.config['port'], debug=app.debug)
+        app.run(host='0.0.0.0', port=app.config.get('PORT', 5001), debug=app.debug)
     finally:
         executor.shutdown()
         # 确保在主应用终止时关闭子进程

@@ -6,8 +6,8 @@
     <div v-else>
       <form @submit.prevent="saveConfig">
         <div v-for="section in orderedConfigSections" :key="section.name" class="config-section">
-          <h2 v-if="section.name !== 'status'">{{ section.name }}</h2>
-          <div v-if="section.name !== 'status'">
+          <h2>{{ section.name }}</h2>
+          <div>
             <div v-for="field in section.orderedFields" :key="field.key" class="config-item">
               <label :for="`${section.name}-${field.key}`">{{ field.key }}:</label>
               <input
@@ -16,13 +16,6 @@
                 type="text"
               />
             </div>
-          </div>
-          <div v-else class="status-section">
-            <h2>服务状态</h2>
-            <p>E-Hentai: <span :class="statusClass((section.data as ConfigStatus).hath_toggle)">{{ statusText((section.data as ConfigStatus).hath_toggle) }}</span></p>
-            <p>NHentai: <span :class="statusClass((section.data as ConfigStatus).nh_toggle)">{{ statusText((section.data as ConfigStatus).nh_toggle) }}</span></p>
-            <p>Aria2: <span :class="statusClass((section.data as ConfigStatus).aria2_toggle)">{{ statusText((section.data as ConfigStatus).aria2_toggle) }}</span></p>
-            <p>Komga: <span :class="statusClass((section.data as ConfigStatus).komga_toggle)">{{ statusText((section.data as ConfigStatus).komga_toggle) }}</span></p>
           </div>
         </div>
         <button type="submit" :disabled="saving">保存配置</button>
@@ -57,6 +50,10 @@ interface ConfigStatus {
   nh_toggle: boolean;
   aria2_toggle: boolean;
   komga_toggle: boolean;
+  eh_funds?: {
+    GP: number | string;
+    Credits: number | string;
+  };
 }
 
 interface FullConfig {
@@ -75,22 +72,18 @@ const { isDark } = useTheme();
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
 
 const orderedConfigSections = computed(() => {
-  return Object.entries(config.value).map(([name, data]) => {
-    const section: {
-      name: string
-      data: ConfigItem | ConfigStatus
-      orderedFields?: OrderedConfigItem[]
-    } = { name, data }
-
-    if (name !== 'status') {
-      section.orderedFields = Object.entries(data as ConfigItem).map(([key, value]) => ({
-        key,
-        value
-      }))
-    }
-
-    return section
-  })
+  return Object.entries(config.value)
+    .filter(([name]) => name !== 'status')
+    .map(([name, data]) => {
+      return {
+        name,
+        data,
+        orderedFields: Object.entries(data as ConfigItem).map(([key, value]) => ({
+          key,
+          value
+        }))
+      }
+    })
 });
 
 const fetchConfig = async () => {
@@ -135,13 +128,6 @@ const saveConfig = async () => {
   }
 };
 
-const statusClass = (status: boolean) => {
-  return status ? 'status-success' : 'status-error';
-};
-
-const statusText = (status: boolean) => {
-  return status ? '✅ 正常' : '❌ 异常';
-};
 
 
 onMounted(fetchConfig);
@@ -264,26 +250,6 @@ button:disabled {
   cursor: not-allowed;
 }
 
-.status-section {
-  margin-top: 20px;
-  padding-top: 15px;
-  border-top: 1px dashed #eee;
-}
-
-.status-section p {
-  margin-bottom: 8px;
-  font-size: 15px;
-}
-
-.status-success {
-  color: #28a745; /* Green */
-  font-weight: bold;
-}
-
-.status-error {
-  color: #dc3545; /* Red */
-  font-weight: bold;
-}
 
 .error-message {
   color: #dc3545;
@@ -355,9 +321,6 @@ button:disabled {
     max-width: 200px;
   }
 
-  .status-section p {
-    font-size: 14px;
-  }
 }
 
 /* 深色模式适配 */
@@ -403,13 +366,6 @@ button:disabled {
 }
 
 
-.dark .status-section {
-  border-top-color: var(--border-color);
-}
-
-.dark .status-section p {
-  color: var(--text-color-light);
-}
 
 .dark .error-message {
   background-color: rgba(220, 53, 69, 0.1);

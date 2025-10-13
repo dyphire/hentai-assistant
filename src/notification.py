@@ -11,17 +11,18 @@ def notify(event, data, logger=None, app_config=None):
     if not app_config:
         return
     
-    notification_config = app_config.get('notification', {})
-    notify_events = app_config.get('notify_events', {})
+    notification_config = app_config.get('NOTIFICATION', {})
+    notify_events = app_config.get('NOTIFY_EVENTS', {})
 
-    if event not in notify_events:
+    event_upper = event.upper()
+    if event_upper not in notify_events:
         return
 
     # 获取为该事件配置的通知服务
-    services_to_notify = notify_events[event]
+    services_to_notify = notify_events[event_upper]
 
     # 处理 Webhook 通知
-    webhook_keys = [s for s in services_to_notify if 'webhook' in s]
+    webhook_keys = [s for s in services_to_notify if 'WEBHOOK' in s.upper()]
     if webhook_keys:
         webhook_urls = [notification_config.get(key) for key in webhook_keys if notification_config.get(key)]
         if webhook_urls:
@@ -30,7 +31,7 @@ def notify(event, data, logger=None, app_config=None):
             send_webhook(url=all_urls, event=event, data=data, logger=logger)
 
     # 处理 Apprise 通知
-    apprise_keys = [s for s in services_to_notify if 'apprise' in s]
+    apprise_keys = [s for s in services_to_notify if 'APPRISE' in s.upper()]
     if apprise_keys:
         apprise_urls = [notification_config.get(key) for key in apprise_keys if notification_config.get(key)]
         send_apprise(apprise_urls=apprise_urls, event=event, data=data, logger=logger)
@@ -141,35 +142,35 @@ def listen_event(komga_server: str, komga_username: str, komga_password: str, ap
 if __name__ == "__main__":
     # 加载配置
     config_data = load_config()
-    komga_config = config_data.get('komga', {})
-    notification_config = config_data.get('notification', {})
+    komga_config = config_data.get('KOMGA', {})
+    notification_config = config_data.get('NOTIFICATION', {})
 
     # 检查 Komga 和通知功能是否启用
-    if not komga_config.get('enable') or not notification_config.get('enable'):
+    if not komga_config.get('ENABLE') or not notification_config.get('ENABLE'):
         logging.getLogger("komga_listener").info("Komga 或通知功能未启用，监听器将不会启动。")
     else:
-        komga_server = komga_config.get('server')
-        komga_username = komga_config.get('username')
-        komga_password = komga_config.get('password')
+        komga_server = komga_config.get('SERVER')
+        komga_username = komga_config.get('USERNAME')
+        komga_password = komga_config.get('PASSWORD')
 
         # 构建 notify 函数需要的 app_config 结构
         notify_events = {}
-        for e_key in ['task.start', 'task.complete', 'task.error',  'komga.new']:
+        for e_key in ['TASK.START', 'TASK.COMPLETE', 'TASK.ERROR',  'KOMGA.NEW']:
             config_value = notification_config.get(e_key, '').strip()
             if config_value:
                 notify_events[e_key] = [item.strip() for item in config_value.split(',') if item.strip()]
 
         app_config_for_listener = {
-            'notification': notification_config,
-            'notify_events': notify_events
+            'NOTIFICATION': notification_config,
+            'NOTIFY_EVENTS': notify_events
         }
 
         # 确保所有必要信息都已配置
-        if all([komga_server, komga_username, komga_password]) and 'komga.new' in notify_events:
+        if all([komga_server, komga_username, komga_password]) and 'KOMGA.NEW' in notify_events:
             listen_event(komga_server, komga_username, komga_password, app_config_for_listener)
         else:
             logger = logging.getLogger("komga_listener")
-            if 'komga.new' not in notify_events:
-                logger.info("配置文件中未针对 'komga.new' 事件进行设置，监听器将不会启动。")
+            if 'KOMGA.NEW' not in notify_events:
+                logger.info("配置文件中未针对 'KOMGA.NEW' 事件进行设置，监听器将不会启动。")
             else:
                 logger.warning("Komga 服务器、用户名或密码未配置完整，监听器无法启动。")

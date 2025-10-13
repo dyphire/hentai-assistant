@@ -14,68 +14,68 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.ini')
 
 def get_default_config():
     return {
-        'general': {
-            'port': '5001',
-            'download_torrent': 'false',
-            'keep_torrents': 'false',
-            'keep_original_file': 'false',
-            'prefer_japanese_title': 'true',
-            'move_path': ''
+        'GENERAL': {
+            'PORT': '5001',
+            'DOWNLOAD_TORRENT': 'false',
+            'KEEP_TORRENTS': 'false',
+            'KEEP_ORIGINAL_FILE': 'false',
+            'PREFER_JAPANESE_TITLE': 'true',
+            'MOVE_PATH': ''
         },
-        'advanced':{
-            'tags_translation': 'false',
-            'remove_ads': 'false',
-            'aggressive_series_detection': 'false', # 启用后，E-Hentai 会对 AltnateSeries 字段进行更激进的检测。
-            'openai_series_detection': 'false' # 启用后，使用配置号的 OpenAI 接口对标题进行系列名和序号的检测。
+        'ADVANCED':{
+            'TAGS_TRANSLATION': 'false',
+            'REMOVE_ADS': 'false',
+            'AGGRESSIVE_SERIES_DETECTION': 'false', # 启用后，E-Hentai 会对 AltnateSeries 字段进行更激进的检测。
+            'OPENAI_SERIES_DETECTION': 'false' # 启用后，使用配置号的 OpenAI 接口对标题进行系列名和序号的检测。
         },
-        'ehentai': {
-            'cookie': ''
+        'EHENTAI': {
+            'COOKIE': ''
         },
-        'nhentai': {
-            'cookie': ''
+        'NHENTAI': {
+            'COOKIE': ''
         },
-        'aria2': {
-            'enable': 'false',
-            'server': 'http://localhost:6800/jsonrpc',
-            'token': '',
-            'download_dir': '',
-            'mapped_dir': ''
+        'ARIA2': {
+            'ENABLE': 'false',
+            'SERVER': 'http://localhost:6800/jsonrpc',
+            'TOKEN': '',
+            'DOWNLOAD_DIR': '',
+            'MAPPED_DIR': ''
         },
-        'komga': {
-            'enable': 'false',
-            'server': '',
-            'username': '', 
-            'password': '', 
-            'library_id': '',
-            'oneshot': '_oneshot'
+        'KOMGA': {
+            'ENABLE': 'false',
+            'SERVER': '',
+            'USERNAME': '',
+            'PASSWORD': '',
+            'LIBRARY_ID': '',
+            'ONESHOT': '_oneshot'
         },
-        'notification': {
-            'enable': 'false',
-            'apprise': '',
-            'webhook': '',
-            'task.start': '',
-            'task.complete': '',
-            'task.error':'',
-            'komga.new':''
+        'NOTIFICATION': {
+            'ENABLE': 'false',
+            'APPRISE': '',
+            'WEBHOOK': '',
+            'TASK.START': '',
+            'TASK.COMPLETE': '',
+            'TASK.ERROR':'',
+            'KOMGA.NEW':''
             
         },
-        'openai': {
-            'api_key': '',
-            'base_url': '',
-            'model': ''
+        'OPENAI': {
+            'API_KEY': '',
+            'BASE_URL': '',
+            'MODEL': ''
         },
-        'comicinfo': {
-            'Title': '{{title}}',
-            'Writer': '{{writer}}',
-            'Penciller': '{{penciller}}',
-            'Translator': '{{translator}}',
-            'Tags': '{{tags}}',
-            'Web': '{{web}}',
-            'AgeRating': '{{agerating}}',
-            'Manga': '{{manga}}',
-            'Genre': '{{genre}}',
-            'LanguageISO': '{{languageiso}}',
-            'AlternateSerie': '{{series}}'
+        'COMICINFO': {
+            'TITLE': '{{title}}',
+            'WRITER': '{{writer}}',
+            'PENCILLER': '{{penciller}}',
+            'TRANSLATOR': '{{translator}}',
+            'TAGS': '{{tags}}',
+            'WEB': '{{web}}',
+            'AGERATING': '{{agerating}}',
+            'MANGA': '{{manga}}',
+            'GENRE': '{{genre}}',
+            'LANGUAGEISO': '{{languageiso}}',
+            'ALTERNATESERIE': '{{series}}'
         }
     }
 
@@ -121,18 +121,30 @@ def load_config():
         config.optionxform = str
         try:
             config.read(CONFIG_PATH, encoding='utf-8')
-            # 只加载 default_config 中定义的键，忽略未知的键
             config_data = {}
+            # 读取 config.ini 并将所有 section 和 key 转换为大写，以实现兼容性
             for section in config.sections():
-                if section in default_config:
-                    config_data[section] = {}
+                upper_section = section.upper()
+                if upper_section in default_config:
+                    config_data[upper_section] = {}
                     for key, value in config.items(section):
-                        # For the 'notification' section, load all keys. For others, only load known keys.
-                        if section == 'notification' or key in default_config[section]:
-                            if key == 'cookie':
-                                config_data[section][key] = unquote_recursive(value)
+                        upper_key = key.upper()
+                        # 对于 NOTIFICATION 部分，加载所有键。对于其他部分，只加载默认配置中存在的键。
+                        # COMICINFO 的键保持其在 default_config 中的原始大小写
+                        if upper_section == 'NOTIFICATION':
+                            config_data[upper_section][upper_key] = unquote_recursive(value)
+                        elif upper_section == 'COMICINFO':
+                            # 对于 ComicInfo，我们需要保留 default_config 中的原始键名大小写
+                            # 找到匹配的原始键名
+                            original_key = next((k for k in default_config[upper_section] if k.upper() == upper_key), None)
+                            if original_key:
+                                config_data[upper_section][original_key] = unquote_recursive(value)
+                        elif upper_key in default_config[upper_section]:
+                            if upper_key == 'COOKIE':
+                                config_data[upper_section][upper_key] = unquote_recursive(value)
                             else:
-                                config_data[section][key] = value
+                                config_data[upper_section][upper_key] = value
+
         except Exception as e:
             print(f"Error reading config file '{CONFIG_PATH}', using default config: {e}")
             config_data = default_config
@@ -145,9 +157,15 @@ def load_config():
             config_updated = True
         else:
             for key, value in section_items.items():
-                if key not in config_data[section]:
-                    config_data[section][key] = value
-                    config_updated = True
+                # 对于 COMICINFO，键的比较是大小写敏感的
+                if section == 'COMICINFO':
+                    if key not in config_data[section]:
+                        config_data[section][key] = value
+                        config_updated = True
+                else: # 对于其他 section，键的比较是大小写不敏感的
+                    if key not in config_data[section]:
+                         config_data[section][key] = value
+                         config_updated = True
 
     if config_updated:
         print(f"Config file '{CONFIG_PATH}' has been updated with missing entries.")

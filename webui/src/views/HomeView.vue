@@ -4,6 +4,7 @@ import IconDownload from '../components/icons/IconDownload.vue'
 import IconTaskList from '../components/icons/IconTaskList.vue'
 import IconConfig from '../components/icons/IconConfig.vue'
 import { useTaskStats } from '../composables/useTaskStats'
+import ServiceStatusCard from '../components/ServiceStatusCard.vue'
 
 const { stats, loading } = useTaskStats()
 </script>
@@ -70,6 +71,8 @@ const { stats, loading } = useTaskStats()
         <div class="stat-label">失败任务</div>
       </div>
     </div>
+
+    <ServiceStatusCard />
   </main>
 </template>
 
