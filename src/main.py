@@ -558,7 +558,7 @@ def download_gallery_task(url, mode, task_id, logger=None):
     if not gmetadata or 'gid' not in gmetadata:
         raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
     # 获取标题
-    if 'title_jpn' in gmetadata and gmetadata['title_jpn'] != None:
+    if gmetadata.get('title_jpn'):
         title = html.unescape(gmetadata['title_jpn'])
     else:
         title = html.unescape(gmetadata['title'])
