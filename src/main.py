@@ -439,7 +439,10 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
             template_vars = {k.lower(): v for k, v in metadata.items()}
             template_vars['filename'] = os.path.basename(dl)
             
-            jinja_env = jinja2.Environment()
+            def finalize_none(value):
+                return "" if value is None else value
+            
+            jinja_env = jinja2.Environment(finalize=finalize_none)
 
             def render_template(template_string):
                 try:

@@ -65,17 +65,17 @@ def get_default_config():
             'MODEL': ''
         },
         'COMICINFO': {
-            'TITLE': '{{title}}',
-            'WRITER': '{{writer}}',
-            'PENCILLER': '{{penciller}}',
-            'TRANSLATOR': '{{translator}}',
-            'TAGS': '{{tags}}',
-            'WEB': '{{web}}',
-            'AGERATING': '{{agerating}}',
-            'MANGA': '{{manga}}',
-            'GENRE': '{{genre}}',
-            'LANGUAGEISO': '{{languageiso}}',
-            'ALTERNATESERIE': '{{series}}'
+            'Title': '{{title}}',
+            'Writer': '{{writer}}',
+            'Penciller': '{{penciller}}',
+            'Translator': '{{translator}}',
+            'Tags': '{{tags}}',
+            'Web': '{{web}}',
+            'AgeRating': '{{agerating}}',
+            'Manga': '{{manga}}',
+            'Genre': '{{genre}}',
+            'LanguageISO': '{{languageiso}}',
+            'AlternateSeries': '{{series}}'
         }
     }
 
