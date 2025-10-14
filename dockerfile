@@ -62,13 +62,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libzbar0 \
     curl \
+    gosu \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # 创建非root用户
-RUN groupadd -r appuser && useradd -r -g appuser -u 1000 appuser
+RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -r appuser
 
 # 安装Python依赖
 COPY --from=python-builder /app/wheels /wheels
@@ -81,7 +82,8 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY src/ ./src/
 COPY scripts/ ./scripts/
 
-# 从前端构建阶段复制构建的静态文件
+COPY scripts/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 COPY --from=frontend-builder /app/frontend/dist ./webui/dist/
 
 # 创建数据目录并设置权限
@@ -93,6 +95,8 @@ USER appuser
 
 # 暴露端口
 EXPOSE 5001
+
+ENTRYPOINT ["docker-entrypoint.sh"]
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \

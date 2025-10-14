@@ -216,7 +216,6 @@ def check_config():
     eh = ehentai.EHentaiTools(cookie=app.config['EH_COOKIE'], logger=global_logger)
     nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)
     eh_valid, exh_valid, eh_funds = eh.is_valid_cookie()
-    print(eh_valid, exh_valid)
     hath_toggle = (eh_valid, exh_valid)
     update_eh_funds(eh_funds)
     nh_toggle = nh.is_valid_cookie()
