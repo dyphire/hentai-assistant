@@ -91,7 +91,6 @@ RUN mkdir -p ./data/download/ehentai ./data/logs && \
     chown -R appuser:appuser /app
 
 # 切换到非root用户
-USER appuser
 
 # 暴露端口
 EXPOSE 5001
