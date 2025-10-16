@@ -155,12 +155,12 @@ if __name__ == "__main__":
     logger = logging.getLogger("komga_listener")
 
     # 检查 Komga 和通知功能是否启用
-    if not komga_config.get('enable') or not notification_config.get('enable'):
-        logger.info("Komga 或通知功能未启用，监听器将不会启动。")
+    if not komga_config.get('enable'):
+        logger.info("Komga 功能未启用，监听器将不会启动。")
     else:
         komga_server = komga_config.get('server')
         komga_username = komga_config.get('username')
-        komga_password = komg_password = komga_config.get('password')
+        komga_password = komga_config.get('password')
 
         # 检查是否有任何通知器订阅了 'komga.new' 事件
         # 检查是否有任何已启用的通知器订阅了 'komga.new' 事件
