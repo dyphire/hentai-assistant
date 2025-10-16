@@ -454,12 +454,30 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
             # 根据 comicinfo 配置生成新的 metadata
             comicinfo_metadata = {}
             comicinfo_config = app.config.get('COMICINFO', {}) or {}
+
+            # 定义一个从 config.yaml 中的小写键到 ComicInfo.xml 驼峰键的映射
+            key_map = {
+                'title': 'Title',
+                'writer': 'Writer',
+                'penciller': 'Penciller',
+                'translator': 'Translator',
+                'tags': 'Tags',
+                'web': 'Web',
+                'agerating': 'AgeRating',
+                'manga': 'Manga',
+                'genre': 'Genre',
+                'languageiso': 'LanguageISO',
+                'alternateseries': 'AlternateSeries'
+            }
+
             for key, value_template in comicinfo_config.items():
                 if isinstance(value_template, str) and value_template:
                     formatted_value = render_template(value_template)
                     # 只有当格式化后的值不是 None 时才添加
                     if formatted_value is not None:
-                         comicinfo_metadata[key] = formatted_value
+                        # 使用映射转换键, 如果键在映射中不存在, 则默认将其首字母大写
+                        camel_key = key_map.get(key, key.capitalize())
+                        comicinfo_metadata[camel_key] = formatted_value
             if logger: logger.info(f"生成的 ComicInfo 元数据: {comicinfo_metadata}")
 
             # 用于渲染路径的变量无法接受 None 值，因此在 comicinfo_metadata 完成之后，再添加回退机制
