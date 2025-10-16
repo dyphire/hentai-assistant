@@ -10,12 +10,9 @@ Desktop.ini
 $RECYCLE.BIN/
 
 # 忽略 data 和 test 文件夹
-data/*
+data/
 test/
 test.*
-
-# 忽略配置文件
-config.ini
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

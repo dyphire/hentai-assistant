@@ -7,44 +7,48 @@ import logging
 from config import load_config
 
 
-def notify(event, data, logger=None, app_config=None):
-    if not app_config:
+def notify(event, data, logger=None, notification_config=None):
+    if not notification_config:
+        # 如果未提供配置，尝试从 config.py 加载
+        notification_config = load_config().get('notification', {})
+
+    if not notification_config.get('enable'):
         return
+
+    notifiers = notification_config.get('notifiers', [])
+    if not notifiers:
+        return
+
+    apprise_notifiers = []
+    webhook_notifiers = []
+
+    for notifier in notifiers:
+        if event in notifier.get('events', []):
+            notifier_type = notifier.get('type', '').lower()
+            url = notifier.get('url')
+            if not url:
+                continue
+
+            if notifier_type == 'apprise':
+                apprise_notifiers.append(notifier)
+            elif notifier_type == 'webhook':
+                webhook_notifiers.append(notifier)
+
+    if webhook_notifiers:
+        send_webhook(notifiers=webhook_notifiers, event=event, data=data, logger=logger)
     
-    notification_config = app_config.get('NOTIFICATION', {})
-    notify_events = app_config.get('NOTIFY_EVENTS', {})
-
-    event_upper = event.upper()
-    if event_upper not in notify_events:
-        return
-
-    # 获取为该事件配置的通知服务
-    services_to_notify = notify_events[event_upper]
-
-    # 处理 Webhook 通知
-    webhook_keys = [s for s in services_to_notify if 'WEBHOOK' in s.upper()]
-    if webhook_keys:
-        webhook_urls = [notification_config.get(key) for key in webhook_keys if notification_config.get(key)]
-        if webhook_urls:
-            # 将所有 URL 合并为一个逗号分隔的字符串
-            all_urls = ",".join(webhook_urls)
-            send_webhook(url=all_urls, event=event, data=data, logger=logger)
-
-    # 处理 Apprise 通知
-    apprise_keys = [s for s in services_to_notify if 'APPRISE' in s.upper()]
-    if apprise_keys:
-        apprise_urls = [notification_config.get(key) for key in apprise_keys if notification_config.get(key)]
-        send_apprise(apprise_urls=apprise_urls, event=event, data=data, logger=logger)
+    if apprise_notifiers:
+        send_apprise(notifiers=apprise_notifiers, event=event, data=data, logger=logger)
         
 
-def send_apprise(apprise_urls, event, data, logger=None):
+def send_apprise(notifiers, event, data, logger=None):
     """Handles sending notifications via Apprise."""
-    if not apprise_urls:
+    if not notifiers:
         return
 
     apobj = apprise.Apprise()
-    for url in apprise_urls:
-        apobj.add(url)
+    for notifier in notifiers:
+        apobj.add(notifier.get('url'))
 
     if event == 'komga.new':
         title = "Komga 新书入库"
@@ -86,28 +90,30 @@ def send_apprise(apprise_urls, event, data, logger=None):
     message_body = "\n".join(message_list)
     
     if apobj.notify(body=message_body, title=title):
-        if logger: logger.info(f"Sent notification for event '{event}' via Apprise to {len(apprise_urls)} destination(s)")
+        destinations = ", ".join([f"{n.get('name', 'Untitled')}({n.get('url')})" for n in notifiers])
+        if logger: logger.info(f"Sent notification for event '{event}' via Apprise to: {destinations}")
     else:
         if logger: logger.error(f"Failed to send notification for event '{event}' via Apprise")
 
 
-def send_webhook(url, event, data, logger=None):
+def send_webhook(notifiers, event, data, logger=None):
     payload = {
             "event": event,
             "timestamp": datetime.datetime.now().isoformat(),
             "data": data
             }
-    try:
-        url_list = [item.strip() for item in url.split(",")]
-        for u in url_list:
-            if logger: logger.info(f"Sending webhook notification for event '{event}' to {u}")
-            response = requests.post(u, json=payload)
+    for notifier in notifiers:
+        name = notifier.get('name', 'Untitled')
+        url = notifier.get('url')
+        try:
+            if logger: logger.info(f"Sending webhook notification for event '{event}' to {name}({url})")
+            response = requests.post(url, json=payload)
             response.raise_for_status()
-            print(f"Webhook sent successfully to {u}")
-    except requests.exceptions.RequestException as e:
-        print(f"Failed to send webhook to {u}: {e}")
+            print(f"Webhook sent successfully to {name}({url})")
+        except requests.exceptions.RequestException as e:
+            print(f"Failed to send webhook to {name}({url}): {e}")
 
-def listen_event(komga_server: str, komga_username: str, komga_password: str, app_config: dict):
+def listen_event(komga_server: str, komga_username: str, komga_password: str, notification_config: dict):
     """监听 Komga SSE 事件并触发通知"""
     sse_url = f"{komga_server}/sse/v1/events"
     listener_logger = logging.getLogger("komga_listener")
@@ -137,40 +143,34 @@ def listen_event(komga_server: str, komga_username: str, komga_password: str, ap
                 book_data = KomgaAPI(komga_server, komga_username, komga_password, logger=listener_logger).get_book(book_id).json()
                 
                 # 调用统一的 notify 函数，而不是直接调用 send_webhook
-                notify(event="komga.new", data=book_data, logger=listener_logger, app_config=app_config)
+                notify(event="komga.new", data=book_data, logger=listener_logger, notification_config=notification_config)
 
 if __name__ == "__main__":
     # 加载配置
     config_data = load_config()
-    komga_config = config_data.get('KOMGA', {})
-    notification_config = config_data.get('NOTIFICATION', {})
+    komga_config = config_data.get('komga', {})
+    notification_config = config_data.get('notification', {})
+    logger = logging.getLogger("komga_listener")
 
     # 检查 Komga 和通知功能是否启用
-    if not komga_config.get('ENABLE') or not notification_config.get('ENABLE'):
-        logging.getLogger("komga_listener").info("Komga 或通知功能未启用，监听器将不会启动。")
+    if not komga_config.get('enable') or not notification_config.get('enable'):
+        logger.info("Komga 或通知功能未启用，监听器将不会启动。")
     else:
-        komga_server = komga_config.get('SERVER')
-        komga_username = komga_config.get('USERNAME')
-        komga_password = komga_config.get('PASSWORD')
+        komga_server = komga_config.get('server')
+        komga_username = komga_config.get('username')
+        komga_password = komg_password = komga_config.get('password')
 
-        # 构建 notify 函数需要的 app_config 结构
-        notify_events = {}
-        for e_key in ['TASK.START', 'TASK.COMPLETE', 'TASK.ERROR',  'KOMGA.NEW']:
-            config_value = notification_config.get(e_key, '').strip()
-            if config_value:
-                notify_events[e_key] = [item.strip() for item in config_value.split(',') if item.strip()]
-
-        app_config_for_listener = {
-            'NOTIFICATION': notification_config,
-            'NOTIFY_EVENTS': notify_events
-        }
+        # 检查是否有任何通知器订阅了 'komga.new' 事件
+        komga_new_event_configured = any(
+            'komga.new' in notifier.get('events', [])
+            for notifier in notification_config.get('notifiers', [])
+        )
 
         # 确保所有必要信息都已配置
-        if all([komga_server, komga_username, komga_password]) and 'KOMGA.NEW' in notify_events:
-            listen_event(komga_server, komga_username, komga_password, app_config_for_listener)
+        if all([komga_server, komga_username, komga_password]) and komga_new_event_configured:
+            listen_event(komga_server, komga_username, komga_password, notification_config)
         else:
-            logger = logging.getLogger("komga_listener")
-            if 'KOMGA.NEW' not in notify_events:
-                logger.info("配置文件中未针对 'KOMGA.NEW' 事件进行设置，监听器将不会启动。")
+            if not komga_new_event_configured:
+                logger.info("配置文件中未针对 'komga.new' 事件进行设置，监听器将不会启动。")
             else:
                 logger.warning("Komga 服务器、用户名或密码未配置完整，监听器无法启动。")
