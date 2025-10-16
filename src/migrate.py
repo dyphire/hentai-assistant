@@ -31,6 +31,10 @@ def migrate_ini_to_yaml():
             ini_config_raw = {section: dict(config.items(section)) for section in config.sections()}
             ini_config = lowercase_keys(ini_config_raw)
 
+            # 排除 notification 部分，以使用新的默认值
+            if 'notification' in ini_config:
+                del ini_config['notification']
+
             # 2. 读取现有的 yaml 配置（如果存在）
             existing_yaml_config = {}
             if os.path.exists(yaml_path):
