@@ -69,6 +69,13 @@ function removeEvent(index: number) {
     </div>
     <div v-if="expanded" class="card-content">
       <div class="config-item">
+        <label>启用:</label>
+        <label class="switch">
+          <input type="checkbox" v-model="notification.enable" />
+          <span class="slider round"></span>
+        </label>
+      </div>
+      <div class="config-item">
         <label>名称:</label>
         <input type="text" v-model="notification.name" />
       </div>
@@ -111,6 +118,61 @@ function removeEvent(index: number) {
 </template>
 
 <style scoped>
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 50px; /* Adjust size */
+  height: 28px; /* Adjust size */
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px; /* Adjust size */
+  width: 20px; /* Adjust size */
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: #2196F3;
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px #2196F3;
+}
+
+input:checked + .slider:before {
+  transform: translateX(22px); /* (width of switch - width of circle) - (padding * 2) = (50 - 20) - (4*2) = 22 */
+}
+
+.slider.round {
+  border-radius: 28px; /* height */
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+
 /* Inherited styles from ConfigView.vue for consistency */
 .config-section {
   background: linear-gradient(135deg, #ffffff 0%, #f8f9fa 100%);
@@ -153,12 +215,12 @@ h2 {
 
 .toggle-btn {
   background: none;
-  border: 1px solid #ddd;
+  border: none;
   border-radius: 50%; /* Make it a circle */
   cursor: pointer;
   color: #555;
-  width: 28px; /* Fixed size */
-  height: 28px; /* Fixed size */
+  width: 50px; /* Fixed size */
+  height: 30px; /* Fixed size */
   display: flex;
   align-items: center;
   justify-content: center;
@@ -167,9 +229,6 @@ h2 {
   flex-shrink: 0; /* Prevent shrinking */
 }
 
-.toggle-btn:hover {
-  background-color: #f0f0f0;
-}
 
 .toggle-btn::after {
   content: '';
@@ -178,12 +237,12 @@ h2 {
   height: 6px;
   border-bottom: 2px solid currentColor;
   border-right: 2px solid currentColor;
-  transform: translateY(-2px) rotate(45deg); /* Pointing down */
+  transform: rotate(45deg); /* Pointing down */
   transition: transform 0.2s ease;
 }
 
 .toggle-btn.is-expanded::after {
-  transform: translateY(2px) rotate(-135deg); /* Pointing up */
+  transform: rotate(-135deg); /* Pointing up */
 }
 
 .config-item {

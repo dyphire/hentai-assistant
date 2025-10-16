@@ -307,11 +307,21 @@ def check_config():
     app.config['CHECKING_CONFIG'] = False
 
     # 通知设置
-    app.config['NOTIFICATION'] = config_data.get('notification', {})
-    if app.config['NOTIFICATION'].get('enable'):
-        global_logger.info("通知服务功能已启用")
+    notification_config = config_data.get('notification', {})
+    
+    # 动态检查是否有任何 notifier 被启用
+    is_any_notifier_enabled = any(
+        details.get('enable') for name, details in notification_config.items()
+    )
+    
+    # 将检查结果作为 'enable' 键添加到字典中
+    notification_config['enable'] = is_any_notifier_enabled
+    app.config['NOTIFICATION'] = notification_config
+
+    if is_any_notifier_enabled:
+        global_logger.info("通知服务功能已启用 (至少有一个通知器处于开启状态)")
     else:
-        global_logger.info("通知服务功能未启用")
+        global_logger.info("通知服务功能未启用 (没有活动的通知器)")
         
     # Openai 设置
     openai_config = config_data.get('openai', {})
@@ -851,13 +861,20 @@ def update_config():
 
     if source == 'notification':
         # 只更新通知相关的配置，不触发完整的 check_config
-        app.config['NOTIFICATION'] = data.get('notification', {})
+        notification_config = data.get('notification', {})
+        is_any_notifier_enabled = any(
+            details.get('enable') for name, details in notification_config.items()
+        )
+        notification_config['enable'] = is_any_notifier_enabled
+        app.config['NOTIFICATION'] = notification_config
+
         global_logger.info("Notification config updated without triggering a full service check.")
+        
         # 可能需要重启通知子进程以应用更改
         if app.config.get('KOMGA_TOGGLE'):
-             global_logger.info("Restarting notification listener to apply changes...")
-             stop_notification_process()
-             start_notification_process()
+            global_logger.info("Restarting notification listener to apply changes...")
+            stop_notification_process()
+            start_notification_process()
         return json_response({'message': 'Notification config updated successfully'}), 200
     else:
         # 原始的完整更新流程

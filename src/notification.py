@@ -12,27 +12,29 @@ def notify(event, data, logger=None, notification_config=None):
         # 如果未提供配置，尝试从 config.py 加载
         notification_config = load_config().get('notification', {})
 
-    if not notification_config.get('enable'):
-        return
-
-    notifiers = notification_config.get('notifiers', [])
-    if not notifiers:
+    if not notification_config or not notification_config.get('enable'):
         return
 
     apprise_notifiers = []
     webhook_notifiers = []
 
-    for notifier in notifiers:
-        if event in notifier.get('events', []):
-            notifier_type = notifier.get('type', '').lower()
-            url = notifier.get('url')
+    # notifiers 现在是一个字典，其中键是 notifier 的名称
+    for notifier_name, notifier_details in notification_config.items():
+        # 跳过 'enable' 键
+        if notifier_name == 'enable':
+            continue
+
+        if notifier_details.get('enable') and event in notifier_details.get('events', []):
+            notifier_type = notifier_details.get('type', '').lower()
+            url = notifier_details.get('url')
             if not url:
                 continue
-
+            
+            # 将 notifier_details 作为一个整体传递，而不是原来的 notifier 变量
             if notifier_type == 'apprise':
-                apprise_notifiers.append(notifier)
+                apprise_notifiers.append(notifier_details)
             elif notifier_type == 'webhook':
-                webhook_notifiers.append(notifier)
+                webhook_notifiers.append(notifier_details)
 
     if webhook_notifiers:
         send_webhook(notifiers=webhook_notifiers, event=event, data=data, logger=logger)
@@ -161,9 +163,10 @@ if __name__ == "__main__":
         komga_password = komg_password = komga_config.get('password')
 
         # 检查是否有任何通知器订阅了 'komga.new' 事件
+        # 检查是否有任何已启用的通知器订阅了 'komga.new' 事件
         komga_new_event_configured = any(
-            'komga.new' in notifier.get('events', [])
-            for notifier in notification_config.get('notifiers', [])
+            details.get('enable') and 'komga.new' in details.get('events', [])
+            for name, details in notification_config.items() if name != 'enable'
         )
 
         # 确保所有必要信息都已配置

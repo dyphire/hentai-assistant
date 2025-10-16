@@ -7,23 +7,24 @@ import axios from 'axios'
 const notifications = ref<any[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
-
-// We will now handle saving state on a per-notifier basis
-// const saving = ref(false) // No longer global
-const saveSuccess = ref(false) // Can still be global for general feedback
+const saveSuccess = ref(false)
 const saveError = ref<string | null>(null)
-
 
 async function fetchNotifications() {
   loading.value = true
   error.value = null
   try {
     const response = await axios.get('/api/config')
-    // Add an isSaving state to each notifier
-    notifications.value = (response.data.notification.notifiers || []).map((n: any) => ({
-      ...n,
-      isSaving: false
-    }))
+    const notificationConfig = response.data.notification || {}
+    
+    // Convert the dictionary to an array for v-for, preserving the key
+    notifications.value = Object.entries(notificationConfig)
+      .filter(([key]) => key !== 'enable') // Exclude the global enable flag
+      .map(([key, value]) => ({
+        key: key, // This is the original dictionary key, e.g., 'my_notifier'
+        ...(value as object),
+        isSaving: false,
+      }))
   } catch (err) {
     error.value = '无法加载通知配置。'
     console.error(err)
@@ -37,38 +38,42 @@ onMounted(() => {
 })
 
 function addNotifier() {
+  // Generate a unique key for the new notifier
+  const newKey = `notifier_${Date.now()}`
   notifications.value.push({
+    key: newKey,
     name: 'New Notifier',
     url: '',
     type: 'apprise',
-    events: []
+    events: [],
+    enable: false, // Default to disabled
+    isSaving: false,
   })
 }
 
-async function removeNotifier(index: number) {
-  const notifier = notifications.value[index]
-  if (window.confirm(`您确定要删除通知器 "${notifier.name}" 吗？卡片上的任何未保存更改都将丢失。`)) {
+async function removeNotifier(key: string) {
+  const notifier = notifications.value.find(n => n.key === key)
+  if (!notifier) return;
+
+  if (window.confirm(`您确定要删除通知器 "${notifier.name}" 吗？`)) {
     notifier.isSaving = true
     saveSuccess.value = false
     saveError.value = null
     try {
       const currentConfig = (await axios.get('/api/config')).data
-      const backendNotifiers = currentConfig.notification.notifiers || []
-      
-      // Remove the notifier at the specified index
-      backendNotifiers.splice(index, 1)
+      const backendNotifiers = currentConfig.notification || {}
+
+      // Delete the notifier by its key
+      delete backendNotifiers[key]
 
       const updatedConfig = {
         ...currentConfig,
-        notification: {
-          ...currentConfig.notification,
-          notifiers: backendNotifiers,
-        },
+        notification: backendNotifiers,
       }
       await axios.post('/api/config?source=notification', updatedConfig)
       
       // On success, remove from the local UI state
-      notifications.value.splice(index, 1)
+      notifications.value = notifications.value.filter(n => n.key !== key)
       saveSuccess.value = true
       setTimeout(() => (saveSuccess.value = false), 3000)
 
@@ -80,32 +85,26 @@ async function removeNotifier(index: number) {
   }
 }
 
-async function saveNotifier(index: number) {
-  const notifier = notifications.value[index]
+async function saveNotifier(key: string) {
+  const notifier = notifications.value.find(n => n.key === key);
+  if (!notifier) return;
+
   notifier.isSaving = true
   saveSuccess.value = false
   saveError.value = null
   try {
     const currentConfig = (await axios.get('/api/config')).data
-    const backendNotifiers = currentConfig.notification.notifiers || []
+    const backendNotifiers = currentConfig.notification || {}
 
-    // Clean the local notifier of its UI state (`isSaving`) before saving
-    const { isSaving, ...localNotifierToSave } = notifier;
+    // Clean the local notifier of its UI state before saving
+    const { isSaving, key: notifierKey, ...localNotifierToSave } = notifier;
 
-    // Update only the specific notifier at its index
-    if (backendNotifiers[index]) {
-      backendNotifiers[index] = localNotifierToSave
-    } else {
-      // This case handles newly added notifiers that don't exist in the backend yet
-      backendNotifiers.push(localNotifierToSave)
-    }
+    // Add/update the notifier in the backend dictionary using its key
+    backendNotifiers[notifierKey] = localNotifierToSave
 
     const updatedConfig = {
       ...currentConfig,
-      notification: {
-        ...currentConfig.notification,
-        notifiers: backendNotifiers,
-      },
+      notification: backendNotifiers,
     }
 
     await axios.post('/api/config?source=notification', updatedConfig)
@@ -117,7 +116,9 @@ async function saveNotifier(index: number) {
     saveError.value = `保存 '${notifier.name}' 失败。`
     console.error(err)
   } finally {
-    notifier.isSaving = false
+    if (notifier) {
+      notifier.isSaving = false
+    }
   }
 }
 </script>
@@ -127,12 +128,12 @@ async function saveNotifier(index: number) {
     <div v-if="loading">加载中...</div>
     <div v-else-if="error" class="error-message">{{ error }}</div>
     <div v-else>
-      <div v-for="(notification, index) in notifications" :key="index" class="notification-card-wrapper">
+      <div v-for="notification in notifications" :key="notification.key" class="notification-card-wrapper">
         <NotificationCard
           :notification="notification"
           :is-saving="notification.isSaving"
-          @delete="removeNotifier(index)"
-          @save="saveNotifier(index)"
+          @delete="removeNotifier(notification.key)"
+          @save="saveNotifier(notification.key)"
         />
       </div>
        <div class="controls">

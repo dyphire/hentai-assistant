@@ -49,10 +49,7 @@ def get_default_config():
             'library_id': '',
             'oneshot': '_oneshot'
         },
-        'notification': {
-            'enable': 'false',
-            'notifiers': []
-        },
+        'notification': {},
         'openai': {
             'api_key': '',
             'base_url': '',
@@ -121,9 +118,15 @@ def load_config():
     # 将用户配置合并到默认配置中
     for section, section_items in user_config.items():
         if section in config_data and isinstance(section_items, dict):
-            for key, value in section_items.items():
-                if key in config_data[section]:
-                    config_data[section][key] = value
+            # If the default section is empty, it's likely a dictionary of user-defined objects.
+            # In this case, we update the empty dict with the user's dict.
+            if not config_data[section]:
+                 config_data[section].update(section_items)
+            else:
+                # Otherwise, merge key by key.
+                for key, value in section_items.items():
+                    if key in config_data[section]:
+                        config_data[section][key] = value
     
     # 检查并补充缺失的配置项
     default_config_for_check = get_default_config()
@@ -149,6 +152,17 @@ def load_config():
                     config_data[section][key] = True
                 elif lower_value in FALSE_VALUES:
                     config_data[section][key] = False
+
+    # Special handling for the notification section to ensure each notifier has default fields
+    if 'notification' in config_data and isinstance(config_data['notification'], dict):
+        for notifier_key, notifier_details in config_data['notification'].items():
+            if isinstance(notifier_details, dict):
+                if 'enable' not in notifier_details:
+                    notifier_details['enable'] = False  # Default to disabled
+                    config_updated = True
+                if 'name' not in notifier_details:
+                    notifier_details['name'] = notifier_key # Default name to its key
+                    config_updated = True
 
     if config_updated:
         print(f"Config file '{CONFIG_PATH}' has been updated with missing entries.")
