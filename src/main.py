@@ -839,6 +839,8 @@ def get_config():
 @app.route('/api/config', methods=['POST'])
 def update_config():
     data = request.get_json()
+    source = request.args.get('source')
+
     if not data:
         return json_response({'error': 'Invalid JSON data'}), 400
 
@@ -847,9 +849,21 @@ def update_config():
     except Exception as e:
         return json_response({'error': f'Failed to save config: {e}'}), 500
 
-    app.config['CHECKING_CONFIG'] = True
-    executor.submit(check_config)
-    return json_response({'message': 'Config updated successfully', 'status_check_started': True}), 200
+    if source == 'notification':
+        # 只更新通知相关的配置，不触发完整的 check_config
+        app.config['NOTIFICATION'] = data.get('notification', {})
+        global_logger.info("Notification config updated without triggering a full service check.")
+        # 可能需要重启通知子进程以应用更改
+        if app.config.get('KOMGA_TOGGLE'):
+             global_logger.info("Restarting notification listener to apply changes...")
+             stop_notification_process()
+             start_notification_process()
+        return json_response({'message': 'Notification config updated successfully'}), 200
+    else:
+        # 原始的完整更新流程
+        app.config['CHECKING_CONFIG'] = True
+        executor.submit(check_config)
+        return json_response({'message': 'Config updated successfully', 'status_check_started': True}), 200
 
 @app.route('/api/tasks', methods=['GET'])
 def get_tasks():

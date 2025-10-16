@@ -1,28 +1,39 @@
 <template>
   <div class="config-view">
     <h1>配置管理</h1>
+
+    <div class="tabs">
+      <button @click="activeTab = 'general'" :class="{ active: activeTab === 'general' }">通用配置</button>
+      <button @click="activeTab = 'notifications'" :class="{ active: activeTab === 'notifications' }">通知设置</button>
+    </div>
+
     <div v-if="loading">加载中...</div>
     <div v-else-if="error" class="error-message">{{ error }}</div>
     <div v-else>
-      <form @submit.prevent="saveConfig">
-        <div v-for="section in orderedConfigSections" :key="section.name" class="config-section">
-          <h2>{{ section.name }}</h2>
-          <div>
-            <div v-for="field in section.orderedFields" :key="field.key" class="config-item">
-              <label :for="`${section.name}-${field.key}`">{{ field.key }}:</label>
-              <input
-                :id="`${section.name}-${field.key}`"
-                v-model="(editableConfig[section.name] as ConfigItem)[field.key]"
-                type="text"
-              />
+      <div v-if="activeTab === 'general'">
+        <form @submit.prevent="saveConfig">
+          <div v-for="section in orderedConfigSections" :key="section.name" class="config-section">
+            <h2>{{ section.name }}</h2>
+            <div>
+              <div v-for="field in section.orderedFields" :key="field.key" class="config-item">
+                <label :for="`${section.name}-${field.key}`">{{ field.key }}:</label>
+                <input
+                  :id="`${section.name}-${field.key}`"
+                  v-model="(editableConfig[section.name] as ConfigItem)[field.key]"
+                  type="text"
+                />
+              </div>
             </div>
           </div>
-        </div>
-        <button type="submit" :disabled="saving">保存配置</button>
-        <div v-if="saving">保存中...</div>
-        <div v-if="saveSuccess" class="success-message">配置保存成功！正在重新检查服务状态...</div>
-        <div v-if="saveError" class="error-message">保存失败: {{ saveError }}</div>
-      </form>
+          <button type="submit" :disabled="saving">保存配置</button>
+          <div v-if="saving">保存中...</div>
+          <div v-if="saveSuccess" class="success-message">配置保存成功！正在重新检查服务状态...</div>
+          <div v-if="saveError" class="error-message">保存失败: {{ saveError }}</div>
+        </form>
+      </div>
+      <div v-if="activeTab === 'notifications'">
+        <NotificationConfigView />
+      </div>
     </div>
   </div>
 </template>
@@ -31,6 +42,7 @@
 import { ref, onMounted, computed } from 'vue';
 import axios from 'axios';
 import { useTheme } from '@/composables/useTheme';
+import NotificationConfigView from './NotificationConfigView.vue';
 
 interface ConfigItem {
   [key: string]: string;
@@ -68,12 +80,13 @@ const saving = ref(false);
 const saveSuccess = ref(false);
 const saveError = ref<string | null>(null);
 const { isDark } = useTheme();
+const activeTab = ref('general');
 
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
 
 const orderedConfigSections = computed(() => {
   return Object.entries(config.value)
-    .filter(([name]) => name !== 'status')
+    .filter(([name]) => name !== 'status' && name !== 'notification')
     .map(([name, data]) => {
       return {
         name,
@@ -134,6 +147,45 @@ onMounted(fetchConfig);
 </script>
 
 <style scoped>
+.tabs {
+  display: flex;
+  margin-bottom: 20px;
+  /* border-bottom: 1px solid #eee; */ /* Remove the faint line */
+}
+
+.tabs button {
+  flex: 1; /* Distribute width equally */
+  text-align: center;
+  padding: 10px 20px;
+  border: none;
+  background-color: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  margin-right: 10px;
+  border-bottom: 2px solid transparent;
+  transition: all 0.3s ease;
+  color: #555; /* Improved default text color for light mode */
+}
+
+.tabs button:last-child {
+    margin-right: 0;
+}
+
+.tabs button.active {
+  background-color: #007bff;
+  color: white; /* 设置为反白颜色 */
+  border-bottom-color: transparent; /* Hide the bottom border line for a cleaner look */
+  font-weight: bold;
+  border-radius: 5px; /* Apply border radius to all 4 corners */
+}
+
+/* 未激活的标签页在悬浮时只显示下划线 */
+.tabs button:not(.active):hover {
+    color: #007bff; /* Change text color to highlight color on hover */
+    background-color: transparent; /* Ensure no background color appears */
+    border-bottom-color: #007bff; /* Change underline to highlight color */
+}
+
 .config-view {
   padding: 20px;
   max-width: 800px;
@@ -186,19 +238,17 @@ h2 {
 
 .config-item {
   display: flex;
-  align-items: center;
-  margin-bottom: 12px;
-  gap: 12px;
+  flex-direction: column;
+  align-items: stretch; /* Make children full width */
+  margin-bottom: 16px; /* Increased margin */
+  gap: 6px; /* Space between label and input */
 }
 
 .config-item label {
-  flex: 0 0 160px;
   font-weight: 600;
   color: #555;
   font-size: 14px;
-  line-height: 1.4;
-  text-align: right;
-  padding-right: 8px;
+  text-align: left;
   word-wrap: break-word;
   hyphens: auto;
 }
@@ -292,21 +342,14 @@ button:disabled {
     padding: 12px;
   }
 
+  /* The new layout is already mobile-friendly, so fewer overrides are needed */
   .config-item {
-    flex-direction: column;
-    align-items: flex-start;
     gap: 8px;
     margin-bottom: 16px;
   }
 
   .config-item label {
-    flex: none;
-    width: 100%;
-    text-align: left;
-    padding-right: 0;
     font-size: 13px;
-    word-wrap: break-word;
-    hyphens: auto;
   }
 
   .config-item input[type="text"] {
@@ -377,5 +420,29 @@ button:disabled {
   background-color: rgba(40, 167, 69, 0.1);
   border-color: var(--success-color);
   color: var(--success-color);
+}
+</style>
+<style scoped>
+/* No longer needed as the border is removed */
+/*
+.dark .tabs {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+*/
+
+.dark .tabs button {
+  color: var(--text-color-light);
+}
+
+.dark .tabs button.active {
+  background-color: var(--primary-color);
+  color: white; /* Ensure text is white in dark mode */
+  border-bottom-color: transparent; /* Hide the bottom border line for a cleaner look */
+}
+
+.dark .tabs button:not(.active):hover {
+  color: var(--primary-color); /* Change text color to highlight color on hover */
+  background-color: transparent; /* Ensure no background color appears */
+  border-bottom-color: var(--primary-color); /* Change underline to highlight color */
 }
 </style>
