@@ -21,7 +21,7 @@ def find_translator(title):
     pattern_a = rf"[\[\(【]([^\]\)】]*?{keywords}[^\]\)】]*)[\]\)】]"
     
     # 规则B: 匹配空格后、且不以括号开头的情况
-    pattern_b = rf"\s+([^\s\[\(【][^\s]*?{keywords}[^\s]*)"
+    pattern_b = rf"\s+([^\[\(【\]\)】\s]*{keywords}[^\[\(【\]\)】\s]*)"
 
     pattern = f"{pattern_a}|{pattern_b}"
 
