@@ -252,7 +252,6 @@ def check_config():
     # Komga API 设置
     komga_config = config_data.get('komga', {})
     komga_enable = komga_config.get('enable', False)
-    app.config['KOMGA_ONESHOT'] = str(komga_config.get('oneshot', '_oneshot'))
 
     if komga_enable:
         global_logger.info("开始测试 Komga API 的连接")
@@ -413,23 +412,6 @@ def check_task_cancelled(task_id):
         if task and task.cancelled:
             raise Exception("Task was cancelled by user")
 
-def download_task(url, mode, task_id, logger=None):
-    if logger: logger.info(f"Task {task_id} started, downloading from: {url}")
-
-    # 检查是否被取消
-    check_task_cancelled(task_id)
-
-    # 检测 URL 类型并选择相应的下载器
-    result = download_gallery_task(url, mode, task_id, logger=logger)
-    
-    # 任务完成通知仍然在此处处理
-    if app.config['NOTIFICATION'].get('enable'):
-        event_data = {
-            "url": url,
-            "task_id": task_id,
-            "metadata": result,
-            }
-        notify(event="task.complete", data=event_data, logger=logger, notification_config=app.config['NOTIFICATION'])
 
 def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=False):
     try:
@@ -492,7 +474,7 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
 
             # 用于渲染路径的变量无法接受 None 值，因此在 comicinfo_metadata 完成之后，再添加回退机制
             template_vars['author'] = metadata.get('Penciller') or metadata.get('Writer') or None
-            template_vars['series'] = metadata.get('Series') or app.config.get('KOMGA_ONESHOT') or None
+            template_vars['series'] = metadata.get('Series') or None
 
 
             move_path_template = app.config.get('MOVE_PATH')
@@ -555,6 +537,7 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
         raise e
 
 def download_gallery_task(url, mode, task_id, logger=None):
+    if logger: logger.info(f"Task {task_id} started, downloading from: {url}")
     # 检查是否被取消
     check_task_cancelled(task_id)
 
@@ -571,7 +554,6 @@ def download_gallery_task(url, mode, task_id, logger=None):
     
     # 在获得 gmetadata 后，触发 task.start 事件
     if app.config['NOTIFICATION'].get('enable'):
-        if logger: logger.info("发送 task.start 通知")
         event_data = {
             "url": url,
             "task_id": task_id,
@@ -651,12 +633,23 @@ def download_gallery_task(url, mode, task_id, logger=None):
     
     # 验证处理结果
     if final_path and is_valid_zip(final_path):
+        
         if logger: logger.info(f"Task {task_id} completed successfully.")
         with tasks_lock:
             if task_id in tasks:
                 tasks[task_id].status = TaskStatus.COMPLETED
         task_db.update_task(task_id, status=TaskStatus.COMPLETED)
-        return metadata # 返回 metadata 以便装饰器或调用者处理完成通知
+        
+        # 发送完成通知
+        if app.config['NOTIFICATION'].get('enable'):
+            event_data = {
+                "url": url,
+                "task_id": task_id,
+                "gmetadata": gmetadata,
+                "metadata": metadata,
+                }
+            notify(event="task.complete", data=event_data, logger=logger, notification_config=app.config['NOTIFICATION'])
+        return # 返回 metadata 以便装饰器或调用者处理完成通知
     else:
         error_message = "Downloaded file is not a valid zip archive."
         # 此处直接抛出异常，装饰器会捕获并发送失败通知
@@ -688,7 +681,6 @@ def task_failure_processing(url, task_id, logger, tasks_lock, tasks):
                     from database import task_db
                     task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
                     
-                    # 在获得 gmetadata 后，触发 task.start 事件
                     if app.config['NOTIFICATION'].get('enable'):
                         event_data = {
                             "task_id": task_id,
@@ -711,7 +703,7 @@ def download_url():
     logger, log_buffer = get_task_logger(task_id)
     
     # 动态应用装饰器
-    decorated_download_task = task_failure_processing(url, task_id, logger, tasks_lock, tasks)(download_task)
+    decorated_download_task = task_failure_processing(url, task_id, logger, tasks_lock, tasks)(download_gallery_task)
     
     future = executor.submit(decorated_download_task, url, mode, task_id, logger)
     with tasks_lock:
@@ -786,7 +778,7 @@ def retry_task(task_id):
 
     # 创建新的任务执行
     logger, log_buffer = get_task_logger(new_task_id)
-    future = executor.submit(download_task, url, mode, new_task_id, logger)
+    future = executor.submit(download_gallery_task, url, mode, new_task_id, logger)
 
     # 更新内存中的任务信息
     with tasks_lock:

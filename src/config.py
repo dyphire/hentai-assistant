@@ -47,7 +47,6 @@ def get_default_config():
             'username': '',
             'password': '',
             'library_id': '',
-            'oneshot': '_oneshot'
         },
         'notification': {},
         'openai': {
