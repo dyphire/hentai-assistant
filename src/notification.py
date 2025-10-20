@@ -130,7 +130,7 @@ def send_webhook(notifiers, event, data, logger=None):
             if logger: logger.info(f"Sending webhook notification for event '{event}' to {name}({url})")
             response = requests.post(url, json=payload)
             response.raise_for_status()
-            print(f"Webhook sent successfully to {name}({url})")
+            #print(f"Webhook sent successfully to {name}({url})")
         except requests.exceptions.RequestException as e:
             print(f"Failed to send webhook to {name}({url}): {e}")
 
@@ -182,6 +182,27 @@ def listen_event(komga_server: str, komga_username: str, komga_password: str, no
                 if book_data:
                     listener_logger.debug(f"正在为事件 '{komga_events[event_type]}' 分发通知, 数据: {book_data}")
                     notify(event=komga_events[event_type], data=book_data, logger=listener_logger, notification_config=notification_config)
+
+                    # 如果 fav_sync 启用，则发送内部通知
+                    config_data = load_config()
+                    ehentai_config = config_data.get('ehentai', {})
+                    fav_sync_enabled = ehentai_config.get('favorite_sync', False)
+                    
+                    if fav_sync_enabled and event_type in ['ThumbnailBookAdded', 'BookDeleted']:
+                        port = config_data.get('general', {}).get('port', 5001)
+                        internal_url = f"http://localhost:{port}/api/internal/favorite"
+                        
+                        # 构建与 main.py 中 API 匹配的 payload
+                        payload = {
+                            'event': komga_events[event_type], # 'komga.new' or 'komga.delete'
+                            'data': book_data
+                        }
+
+                        try:
+                            requests.post(internal_url, json=payload, timeout=10)
+                            listener_logger.info(f"成功发送内部 '{komga_events[event_type]}' 事件通知到 {internal_url}")
+                        except requests.exceptions.RequestException as e:
+                            listener_logger.error(f"发送内部 '{komga_events[event_type]}' 事件通知失败: {e}")
 
 if __name__ == "__main__":
     # 加载配置

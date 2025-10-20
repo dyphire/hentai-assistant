@@ -84,6 +84,29 @@ class KomgaAPI:
             series_id = text
         return self.session.get(self.server + f'/api/v1/series/{series_id}')
 
+    def search_book_by_title(self, title: str):
+        """
+        根据标题搜索书籍
+        """
+        request_body = {
+            "condition": {
+                "allOf": [
+                    {
+                        "title": {
+                            "operator": "contains",
+                            "value": title
+                        }
+                    }
+                ]
+            }
+        }
+        response = self.session.post(self.server + '/api/v1/books/list', json=request_body)
+        if response.status_code == 200:
+            return response.json().get('content', [])
+        else:
+            if self.logger: self.logger.error(f"Error searching book by title '{title}': {response.status_code} - {response.text}")
+            return []
+
     def get_collections(self, id=None, library_id=None):
         # 未提供具体 id 的情况, 获取指定 library 的所有合集
         if id == None and not library_id == None:

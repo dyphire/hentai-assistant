@@ -34,6 +34,34 @@
           </div>
         </div>
       </div>
+      <div class="form-group">
+        <label for="favcat">添加到收藏夹 (仅 E-Hentai):</label>
+        <div class="custom-select-wrapper">
+          <div
+            class="custom-select"
+            @click="toggleFavcatDropdown"
+            :class="{ 'custom-select-open': isFavcatDropdownOpen }"
+          >
+            <span class="custom-select-value">{{ getSelectedFavcatLabel() }}</span>
+            <span class="custom-select-arrow" :class="{ 'custom-select-arrow-open': isFavcatDropdownOpen }">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="6,9 12,15 18,9"></polyline>
+              </svg>
+            </span>
+          </div>
+          <div v-if="isFavcatDropdownOpen" class="custom-dropdown" ref="favcatDropdown">
+            <div
+              v-for="option in favcatOptions"
+              :key="option.value"
+              class="custom-option"
+              :class="{ 'custom-option-selected': favcat === option.value }"
+              @click="selectFavcatOption(option.value)"
+            >
+              {{ option.label }}
+            </div>
+          </div>
+        </div>
+      </div>
       <button type="submit" :disabled="submitting">提交下载</button>
     </form>
 
@@ -56,9 +84,10 @@ const submitting = ref(false);
 const submitSuccess = ref(false);
 const submitError = ref<string | null>(null);
 const taskId = ref<string | null>(null);
+
+// 下载模式下拉菜单
 const isDropdownOpen = ref(false);
 const dropdown = ref<HTMLElement | null>(null);
-
 const modeOptions = [
   { value: '', label: '自动选择' },
   { value: 'torrent', label: '种子下载' },
@@ -66,20 +95,60 @@ const modeOptions = [
   { value: 'both', label: '两者都尝试' }
 ];
 
+// 收藏夹分类下拉菜单
+const favcat = ref<string>(''); // -1 表示不添加到收藏夹
+const isFavcatDropdownOpen = ref(false);
+const favcatDropdown = ref<HTMLElement | null>(null);
+const favcatOptions = ref([
+  { value: '', label: '无' }
+]);
+
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
 
-// 从localStorage加载保存的下载模式
+const fetchFavcatOptions = async () => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/ehentai/favcats`);
+    if (response.data && Array.isArray(response.data)) {
+      const formattedOptions = response.data.map((fav: { id: string; name: string }) => ({
+        value: fav.id,
+        label: fav.name
+      }));
+      // 将获取到的选项追加到“无”之后
+      favcatOptions.value = [{ value: '', label: '无' }, ...formattedOptions];
+    }
+  } catch (error) {
+    console.error('获取收藏夹列表失败:', error);
+    // 即使失败，也提供一个默认的列表
+    favcatOptions.value = [
+      { value: '', label: '无' },
+      ...Array.from({ length: 10 }, (_, i) => ({ value: `${i}`, label: `Favorites ${i}` }))
+    ];
+  }
+};
+
+// 从localStorage加载保存的下载模式和收藏夹分类
 onMounted(() => {
+  fetchFavcatOptions(); // 获取收藏夹列表
+
   const savedMode = localStorage.getItem('downloadMode');
   if (savedMode) {
     mode.value = savedMode;
+  }
+  const savedFavcat = localStorage.getItem('downloadFavcat');
+  if (savedFavcat) {
+    favcat.value = savedFavcat;
   }
 
   // 点击外部关闭下拉菜单
   const handleClickOutside = (event: Event) => {
     const target = event.target as HTMLElement;
+    // 关闭下载模式下拉
     if (dropdown.value && !dropdown.value.contains(target) && !target.closest('.custom-select')) {
       isDropdownOpen.value = false;
+    }
+    // 关闭收藏夹下拉
+    if (favcatDropdown.value && !favcatDropdown.value.contains(target) && !target.closest('.custom-select')) {
+      isFavcatDropdownOpen.value = false;
     }
   };
 
@@ -100,6 +169,14 @@ watch(mode, (newMode) => {
   }
 });
 
+watch(favcat, (newFavcat) => {
+  if (newFavcat) {
+    localStorage.setItem('downloadFavcat', newFavcat);
+  } else {
+    localStorage.removeItem('downloadFavcat');
+  }
+});
+
 const submitDownload = async () => {
   submitting.value = true;
   submitSuccess.value = false;
@@ -107,12 +184,17 @@ const submitDownload = async () => {
   taskId.value = null;
 
   try {
-    const response = await axios.get(`${API_BASE_URL}/download`, {
-      params: {
-        url: url.value,
-        mode: mode.value,
-      },
-    });
+    const params: { url: string; mode: string; fav?: string } = {
+      url: url.value,
+      mode: mode.value,
+    };
+    
+    // 如果选择了收藏夹分类，则添加 fav 参数
+    if (favcat.value !== '') {
+      params.fav = favcat.value;
+    }
+    
+    const response = await axios.get(`${API_BASE_URL}/download`, { params });
     submitSuccess.value = true;
     taskId.value = response.data.task_id;
     url.value = ''; // 清空输入
@@ -142,6 +224,25 @@ const selectOption = (value: string) => {
     localStorage.setItem('downloadMode', value);
   } else {
     localStorage.removeItem('downloadMode');
+  }
+};
+
+const toggleFavcatDropdown = () => {
+  isFavcatDropdownOpen.value = !isFavcatDropdownOpen.value;
+};
+
+const getSelectedFavcatLabel = () => {
+  const selectedOption = favcatOptions.value.find(option => option.value === favcat.value);
+  return selectedOption ? selectedOption.label : '无';
+};
+
+const selectFavcatOption = (value: string) => {
+  favcat.value = value;
+  isFavcatDropdownOpen.value = false;
+  if (value) {
+    localStorage.setItem('downloadFavcat', value);
+  } else {
+    localStorage.removeItem('downloadFavcat');
   }
 };
 </script>

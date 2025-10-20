@@ -22,13 +22,14 @@ from providers import aria2
 from providers import ehentai
 from providers import nhentai
 from providers.ehtranslator import EhTagTranslator
-from utils import check_dirs, is_valid_zip, TaskStatus
+from utils import check_dirs, is_valid_zip, TaskStatus, parse_gallery_url
 from notification import notify
 import cbztool
 from database import task_db
 from config import load_config, save_config
-from metadata_extractor import MetadataExtractor
+from metadata_extractor import MetadataExtractor, parse_filename
 from migrate import migrate_ini_to_yaml
+from scheduler import init_scheduler, update_scheduler_jobs
 
 # 全局变量用于存储子进程对象
 notification_process = None
@@ -206,12 +207,32 @@ def check_config():
     cookie = ehentai_config.get('cookie', '')
     app.config['EH_COOKIE'] = {"cookie": cookie} if cookie else {"cookie": ""}
 
+    # E-Hentai 收藏夹同步设置 (扁平化结构)
+    app.config['EH_FAV_SYNC_ENABLED'] = ehentai_config.get('favorite_sync', False)
+    app.config['EH_FAV_SYNC_INTERVAL'] = int(ehentai_config.get('interval_hours', 24))
+    
+    # listen_categories 支持 "" (所有), 或 "0,1,2" (特定)
+    favcat_setting = ehentai_config.get('listen_categories', '')
+    if favcat_setting == '':
+        app.config['EH_FAV_SYNC_FAVCAT'] = list(map(str, range(10)))  # "" 对应 0-9
+    else:
+        # 将 "0,1,2" 这样的字符串转换为 ["0", "1", "2"]
+        app.config['EH_FAV_SYNC_FAVCAT'] = [cat.strip() for cat in str(favcat_setting).split(',')]
+    
+
     # nhentai 设置
     nhentai_config = config_data.get('nhentai', {})
     nhentai_cookie = nhentai_config.get('cookie', '')
     app.config['NHENTAI_COOKIE'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
 
-    eh = ehentai.EHentaiTools(cookie=app.config['EH_COOKIE'], logger=global_logger)
+    # 初始化 E-Hentai 工具类并存储在 app.config 中
+    if 'EH_TOOLS' not in app.config:
+        app.config['EH_TOOLS'] = ehentai.EHentaiTools(cookie=app.config['EH_COOKIE'], logger=global_logger)
+    else:
+        # 如果已存在，则只更新 cookie
+        app.config['EH_TOOLS'].cookie = app.config['EH_COOKIE']
+    
+    eh = app.config['EH_TOOLS']
     nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)
     eh_valid, exh_valid, eh_funds = eh.is_valid_cookie()
     hath_toggle = (eh_valid, exh_valid)
@@ -348,6 +369,10 @@ def check_config():
             global_logger.debug(f"从数据库加载 eh_funds: {app.config['EH_FUNDS']}")
         except json.JSONDecodeError:
             global_logger.error("从数据库加载 eh_funds 失败：无效的 JSON 格式")
+
+    # 仅在主工作进程中更新调度器任务
+    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true':
+        update_scheduler_jobs(app)
 
 def get_eh_mode(config, mode):
     aria2 = config.get('ARIA2_TOGGLE', False)
@@ -536,8 +561,8 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
         if logger: logger.error(f"Post-download processing failed: {e}")
         raise e
 
-def download_gallery_task(url, mode, task_id, logger=None):
-    if logger: logger.info(f"Task {task_id} started, downloading from: {url}")
+def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
+    if logger: logger.info(f"Task {task_id} started, downloading from: {url}, favcat: {favcat}")
     # 检查是否被取消
     check_task_cancelled(task_id)
 
@@ -547,8 +572,8 @@ def download_gallery_task(url, mode, task_id, logger=None):
     if is_nhentai:
         gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('NHENTAI_COOKIE'), logger=logger)
     else:
-        gallery_tool = ehentai.EHentaiTools(cookie=app.config.get('EH_COOKIE'), logger=logger)
-
+        gallery_tool = app.config['EH_TOOLS']
+ 
     # 获取画廊元数据
     gmetadata = gallery_tool.get_gmetadata(url)
     
@@ -649,6 +674,47 @@ def download_gallery_task(url, mode, task_id, logger=None):
                 "metadata": metadata,
                 }
             notify(event="task.complete", data=event_data, logger=logger, notification_config=app.config['NOTIFICATION'])
+
+        # 如果是收藏夹任务 (且不是nhentai)，执行特殊流程
+        if favcat is not False and not is_nhentai:
+            logger.info(f"Task {task_id} is a favorite E-Hentai gallery, triggering special process...")
+            gid = gmetadata.get('gid')
+            if gid:
+                favorite_record = task_db.get_eh_favorite_by_gid(gid)
+                if favorite_record:
+                    # 检查 favcat 是否需要更新
+                    if str(favorite_record.get('favcat')) != favcat:
+                        logger.info(f"Favorite record found for gid {gid} with a different favcat. Updating from {favorite_record.get('favcat')} to {favcat}.")
+                        task_db.update_favorite_favcat(gid, favcat)
+
+                    if not favorite_record.get('downloaded'):
+                        logger.info(f"Favorite record found for gid {gid}, marking as downloaded.")
+                        task_db.mark_favorite_as_downloaded(gid)
+                    else:
+                        logger.info(f"Favorite record for gid {gid} is already marked as downloaded.")
+                else:
+                    logger.info(f"No favorite record found for gid {gid}. Adding to online and local favorites.")
+                    token = gmetadata.get('token')
+                    if token:
+                        if gallery_tool.add_to_favorites(gid=gid, token=token, favcat=favcat):
+                            # 添加到线上成功后，同步到本地数据库并标记为已下载
+                            # 使用 metadata_extractor 来生成标准化的标题
+                            raw_title = gmetadata.get('title_jpn') or gmetadata.get('title')
+                            clean_title, _, _ = parse_filename(raw_title, eh_translator)
+                            fav_data = [{
+                                'url': f"https://exhentai.org/g/{gid}/{token}/",
+                                'title': clean_title,
+                                'favcat': favcat
+                            }]
+                            task_db.add_eh_favorites(fav_data)
+                            task_db.mark_favorite_as_downloaded(gid)
+                            logger.info(f"Successfully added and marked gid {gid} as a local favorite.")
+                        else:
+                            logger.error(f"Failed to add gid {gid} to online favorites.")
+                    else:
+                        logger.warning(f"Could not get token from gmetadata for favorite task {task_id}.")
+            else:
+                logger.warning(f"Could not get gid from gmetadata for favorite task {task_id}.")
         return # 返回 metadata 以便装饰器或调用者处理完成通知
     else:
         error_message = "Downloaded file is not a valid zip archive."
@@ -696,6 +762,19 @@ def task_failure_processing(url, task_id, logger, tasks_lock, tasks):
 def download_url():
     url = request.args.get('url')
     mode = request.args.get('mode')
+    fav_param = request.args.get('fav', 'false').lower()
+    
+    # 新的 fav 参数处理逻辑
+    # 如果是 true, t, 1, y, yes -> '0'
+    # 如果是数字 0-9 -> 该数字的字符串
+    # 否则 -> False
+    if fav_param in ('true', 't', '1', 'y', 'yes'):
+        favcat = '0'
+    elif fav_param.isdigit() and 0 <= int(fav_param) <= 9:
+        favcat = fav_param
+    else:
+        favcat = False
+
     if not url:
         return json_response({'error': 'No URL provided'}), 400
     # 两位年份+月日时分秒，使用UTC时间避免时区问题
@@ -705,7 +784,7 @@ def download_url():
     # 动态应用装饰器
     decorated_download_task = task_failure_processing(url, task_id, logger, tasks_lock, tasks)(download_gallery_task)
     
-    future = executor.submit(decorated_download_task, url, mode, task_id, logger)
+    future = executor.submit(decorated_download_task, url, mode, task_id, logger, favcat)
     with tasks_lock:
         tasks[task_id] = TaskInfo(future, logger, log_buffer)
 
@@ -1051,6 +1130,101 @@ def clear_tasks():
 
     return json_response({'message': f'Tasks with status "{status_to_clear}" cleared successfully'}), 200
 
+@app.route('/api/internal/favorite', methods=['POST'])
+def handle_internal_favorite():
+    """处理来自 notification.py 的内部 Komga 事件，用于收藏夹同步"""
+    data = request.get_json()
+    if not data or 'event' not in data:
+        return json_response({'error': 'No event type provided'}), 400
+
+    event_type = data.get('event')
+    event_data = data.get('data', {})
+
+    if event_type == 'komga.new':
+        return handle_favorite_downloaded(event_data)
+    elif event_type == 'komga.delete':
+        return handle_favorite_deleted(event_data)
+    else:
+        return json_response({'error': f"Unknown event type for internal favorite sync: {event_type}"}), 400
+
+def handle_favorite_downloaded(data):
+    """处理收藏夹项目已下载的逻辑 (komga.new)"""
+    gallery_url = None
+    links = data.get('metadata', {}).get('links', [])
+    for link in links:
+        if link.get('label') in ('e-hentai.org', 'exhentai.org', 'E-Hentai'):
+            gallery_url = link.get('url')
+            break
+    
+    if not gallery_url:
+        return json_response({'error': "E-Hentai/ExHentai URL not found in Komga metadata"}), 404
+
+    gid, _ = parse_gallery_url(gallery_url)
+    if not gid:
+        return json_response({'error': f"Could not parse gid/token from URL: {gallery_url}"}), 400
+
+    komga_book_id = data.get('id')
+    if not komga_book_id:
+        success = task_db.mark_favorite_as_downloaded(gid)
+        if success:
+            global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已下载 (Komga Book ID 未提供)。")
+            return json_response({'message': f'Favorite (gid: {gid}) marked as downloaded.'}), 200
+        else:
+            global_logger.warning(f"无法将收藏夹项目 (gid: {gid}) 标记为已下载 (可能该收藏在本地不存在)。")
+            return json_response({'message': 'Favorite not found or already marked as downloaded.'}), 404
+
+    success = task_db.update_favorite_komga_id(gid, komga_book_id)
+    if success:
+        global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已同步到 Komga (Book ID: {komga_book_id})。")
+        return json_response({'message': f'Favorite (gid: {gid}) marked as synced with Komga book ID {komga_book_id}.'}), 200
+    else:
+        global_logger.warning(f"无法将收藏夹项目 (gid: {gid}) 标记为已同步 (可能该收藏在本地不存在)。")
+        return json_response({'message': 'Favorite not found or failed to mark as synced.'}), 404
+
+def handle_favorite_deleted(data):
+    """处理收藏夹项目被删除的逻辑 (komga.delete)"""
+    komga_book_id = data.get('id')
+    if not komga_book_id:
+        return json_response({'error': 'No book_id (id) provided for deletion event'}), 400
+
+    favorite = task_db.get_favorite_by_komga_id(komga_book_id)
+    if not favorite:
+        global_logger.info(f"未找到与 Komga Book ID {komga_book_id} 关联的收藏夹记录，无需操作。")
+        return json_response({'message': 'No favorite record found for this Komga book ID.'}), 200
+
+    gid = favorite.get('gid')
+    if not gid:
+        return json_response({'error': 'Favorite record is missing gid.'}), 500
+        
+    eh_tools = app.config.get('EH_TOOLS')
+    if not eh_tools:
+        return json_response({'error': 'E-Hentai tools not initialized'}), 500
+
+    delete_success = eh_tools.delete_from_favorites(str(gid))
+    if delete_success:
+        global_logger.info(f"成功从线上收藏夹删除 gid: {gid}。")
+        task_db.delete_eh_favorites_by_gids([gid])
+        global_logger.info(f"成功从本地数据库删除收藏夹记录 gid: {gid}。")
+        return json_response({'message': f'Successfully deleted favorite (gid: {gid}) online and locally.'}), 200
+    else:
+        global_logger.error(f"从线上收藏夹删除 gid: {gid} 失败。")
+        return json_response({'error': f'Failed to delete favorite (gid: {gid}) from online favorites.'}), 500
+
+@app.route('/api/ehentai/favcats', methods=['GET'])
+def get_ehentai_favcats():
+    """获取 E-Hentai 收藏夹列表"""
+    if 'EH_TOOLS' in app.config:
+        eh_tools = app.config['EH_TOOLS']
+        favcat_list = eh_tools.get_favcat_list()
+        
+        # 确保至少在同步任务运行一次后才有数据
+        if not favcat_list and app.config.get('EH_FAV_SYNC_ENABLED'):
+             return json_response({'message': '正在获取收藏夹列表, 请刷新页面重试。'}), 202
+
+        return json_response(favcat_list)
+    else:
+        return json_response({'error': 'E-Hentai tools not initialized'}), 500
+
 # Catch-all 路由，用于服务 Vue.js 的 index.html
 # 确保这个路由在所有 API 路由之后定义
 @app.route('/', defaults={'path': ''})
@@ -1085,32 +1259,39 @@ if __name__ == '__main__':
     check_config()
     
     
-    # 启动时迁移内存中的任务到数据库
-    if tasks:
-        global_logger.info("正在迁移内存中的任务到数据库...")
-        success = task_db.migrate_memory_tasks(tasks)
-        if success:
-            global_logger.info("任务迁移完成")
-        else:
-            global_logger.error("任务迁移失败")
-
-    # 将重启前的进行中任务标记为失败
-    global_logger.info("正在检查并标记重启前的进行中任务...")
-    try:
-        with sqlite3.connect('./data/tasks.db') as conn:
-            cursor = conn.execute('SELECT id FROM tasks WHERE status = ?', (TaskStatus.IN_PROGRESS,))
-            in_progress_tasks = cursor.fetchall()
-            if in_progress_tasks:
-                for task_row in in_progress_tasks:
-                    task_id = task_row[0]
-                    conn.execute('UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?',
-                               (TaskStatus.ERROR, '任务因应用重启而中断', datetime.now(timezone.utc).isoformat(), task_id))
-                conn.commit()
-                global_logger.info(f"已将 {len(in_progress_tasks)} 个进行中任务标记为失败")
+    # 仅在主工作进程中执行一次性初始化，以避免 reloader 重复执行
+    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true':
+        # 启动时迁移内存中的任务到数据库
+        if tasks:
+            global_logger.info("正在迁移内存中的任务到数据库...")
+            success = task_db.migrate_memory_tasks(tasks)
+            if success:
+                global_logger.info("任务迁移完成")
             else:
-                global_logger.info("没有发现进行中的任务")
-    except sqlite3.Error as e:
-        global_logger.error(f"标记进行中任务失败时发生数据库错误: {e}")
+                global_logger.error("任务迁移失败")
+
+        # 将重启前的进行中任务标记为失败
+        global_logger.info("正在检查并标记重启前的进行中任务...")
+        try:
+            with sqlite3.connect('./data/tasks.db') as conn:
+                cursor = conn.execute('SELECT id FROM tasks WHERE status = ?', (TaskStatus.IN_PROGRESS,))
+                in_progress_tasks = cursor.fetchall()
+                if in_progress_tasks:
+                    for task_row in in_progress_tasks:
+                        task_id = task_row[0]
+                        conn.execute('UPDATE tasks SET status = ?, error = ?, updated_at = ? WHERE id = ?',
+                                   (TaskStatus.ERROR, '任务因应用重启而中断', datetime.now(timezone.utc).isoformat(), task_id))
+                    conn.commit()
+                    global_logger.info(f"已将 {len(in_progress_tasks)} 个进行中任务标记为失败")
+                else:
+                    global_logger.info("没有发现进行中的任务")
+        except sqlite3.Error as e:
+            global_logger.error(f"标记进行中任务失败时发生数据库错误: {e}")
+
+        # 初始化并启动调度器
+        init_scheduler(app)
+        # 启动后立即根据当前配置更新一次任务
+        update_scheduler_jobs(app)
 
     try:
         # 使用已经计算好的 debug_mode 来运行应用

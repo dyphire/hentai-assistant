@@ -3,7 +3,7 @@ import threading
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
-from utils import TaskStatus
+from utils import TaskStatus, parse_gallery_url
 
 class TaskDatabase:
     STATUS_MAP = {
@@ -62,6 +62,18 @@ class TaskDatabase:
                     conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
 
             conn.commit()
+
+            # 创建 eh_favorites 表
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS eh_favorites (
+                    gid INTEGER PRIMARY KEY,
+                    token TEXT NOT NULL,
+                    title TEXT,
+                    favcat INTEGER,
+                    downloaded BOOLEAN DEFAULT 0,
+                    komga TEXT
+                )
+            ''')
 
     def add_task(self, task_id: str, status: str = TaskStatus.IN_PROGRESS,
                  filename: Optional[str] = None, error: Optional[str] = None,
@@ -264,6 +276,151 @@ class TaskDatabase:
                     return row[0] if row else None
             except sqlite3.Error as e:
                 print(f"Database error getting global state: {e}")
+                return None
+
+    def add_eh_favorites(self, favorites: List[Dict]) -> bool:
+        """将 E-Hentai 收藏夹数据添加到数据库"""
+        with self.lock:
+            favorites_to_add = []
+            for fav in favorites:
+                gid, token = parse_gallery_url(fav.get('url', ''))
+                if gid and token:
+                    favorites_to_add.append({
+                        'gid': gid,
+                        'token': token,
+                        'title': fav.get('title'),
+                        'favcat': fav.get('favcat'),
+                    })
+
+            if not favorites_to_add:
+                return True
+
+            try:
+                with self._get_conn() as conn:
+                    conn.executemany('''
+                        INSERT OR IGNORE INTO eh_favorites (gid, token, title, favcat)
+                        VALUES (:gid, :token, :title, :favcat)
+                    ''', favorites_to_add)
+                    conn.commit()
+                return True
+            except sqlite3.Error as e:
+                print(f"Database error adding EH favorites: {e}")
+                return False
+
+    def get_eh_favorites_by_favcat(self, favcat_list: List[str]) -> List[Dict]:
+        """根据收藏夹分类ID获取所有画廊"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    placeholders = ','.join('?' for _ in favcat_list)
+                    query = f"SELECT gid, token, favcat FROM eh_favorites WHERE favcat IN ({placeholders})"
+                    cursor = conn.execute(query, favcat_list)
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                print(f"Database error getting EH favorites by favcat: {e}")
+                return []
+
+    def delete_eh_favorites_by_gids(self, gids: List[int]) -> bool:
+        """根据 GID 列表删除收藏夹记录"""
+        if not gids:
+            return True
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    placeholders = ','.join('?' for _ in gids)
+                    query = f"DELETE FROM eh_favorites WHERE gid IN ({placeholders})"
+                    conn.execute(query, gids)
+                    conn.commit()
+                return True
+            except sqlite3.Error as e:
+                print(f"Database error deleting EH favorites: {e}")
+                return False
+
+    def get_eh_favorite_by_gid(self, gid: int) -> Optional[Dict]:
+        """根据 GID 获取单个收藏夹项目"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute('SELECT * FROM eh_favorites WHERE gid = ?', (gid,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                print(f"Database error getting EH favorite by GID: {e}")
+                return None
+
+    def get_undownloaded_favorites(self) -> List[Dict]:
+        """获取所有尚未下载的收藏夹项目"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute('SELECT * FROM eh_favorites WHERE downloaded = ?', (False,))
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                print(f"Database error getting undownloaded favorites: {e}")
+                return []
+
+    def mark_favorite_as_downloaded(self, gid: int) -> bool:
+        """将指定 GID 的收藏夹项目标记为已下载"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    cursor = conn.execute('UPDATE eh_favorites SET downloaded = ? WHERE gid = ?', (True, gid))
+                    conn.commit()
+                    return cursor.rowcount > 0
+            except sqlite3.Error as e:
+                print(f"Database error marking favorite as downloaded: {e}")
+                return False
+
+    def update_favorite_komga_id(self, gid: int, komga_id: str) -> bool:
+        """将指定 GID 的收藏夹项目的 Komga ID 记录下来，并标记为已下载"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    cursor = conn.execute('UPDATE eh_favorites SET komga = ?, downloaded = ? WHERE gid = ?', (komga_id, True, gid))
+                    conn.commit()
+                    return cursor.rowcount > 0
+            except sqlite3.Error as e:
+                print(f"Database error updating favorite's Komga ID: {e}")
+                return False
+
+    def update_favorite_favcat(self, gid: int, favcat: str) -> bool:
+        """更新指定 GID 的收藏夹项目的 favcat"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    cursor = conn.execute('UPDATE eh_favorites SET favcat = ? WHERE gid = ?', (favcat, gid))
+                    conn.commit()
+                    return cursor.rowcount > 0
+            except sqlite3.Error as e:
+                print(f"Database error updating favorite's favcat: {e}")
+                return False
+
+    def get_favorites_without_komga_id(self) -> List[Dict]:
+        """获取所有 komga 字段为空的收藏夹项目"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute('SELECT * FROM eh_favorites WHERE komga IS NULL')
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                print(f"Database error getting favorites without komga id: {e}")
+                return []
+
+    def get_favorite_by_komga_id(self, komga_id: str) -> Optional[Dict]:
+        """根据 Komga Book ID 获取单个收藏夹项目"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute('SELECT * FROM eh_favorites WHERE komga = ?', (komga_id,))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                print(f"Database error getting favorite by Komga ID: {e}")
                 return None
 
 # 全局数据库实例

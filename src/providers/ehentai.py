@@ -59,6 +59,7 @@ class EHentaiTools:
         self.session = requests.Session()
         self.session.headers.update(headers)
         self.session.cookies.update(cookie)
+        self.favcat_map = {}
 
     def _check_url(self, url, name, error_msg, success_msg, keyword=None):
         try:
@@ -309,3 +310,276 @@ class EHentaiTools:
                 except Exception as e:
                     # 如果发生了特定类型的异常，执行这里的代码
                     if self.logger: self.logger.info(f"An error occurred: {e}")
+
+    LAYOUT_SELECTORS = {
+        "thumbnail": 'div[class^="itg gld"]',
+        "minimal": 'table[class^="itg gltm"]',
+        "compact": 'table[class^="itg gltc"]',
+        "extended": 'table[class^="itg glte"]',
+    }
+
+    def _get_layout(self, soup: BeautifulSoup) -> str:
+        for layout, selector in self.LAYOUT_SELECTORS.items():
+            if soup.select_one(selector):
+                return layout
+
+    def _build_favcat_map(self, soup: BeautifulSoup) -> dict:
+        favcat_map = {}
+        fav_elements = soup.select('div.nosel div.fp[onclick]')
+        for element in fav_elements:
+            name_div = element.select_one('div:nth-of-type(3)')
+            if not name_div:
+                continue
+            category_name = name_div.get_text(strip=True)
+            onclick_attr = element.get('onclick', '')
+            match = re.search(r"favcat=(\d+)", onclick_attr)
+            if match:
+                favcat_id = match.group(1)
+                favcat_map[favcat_id] = category_name
+        
+        if favcat_map:
+            # 使用 update 保留旧数据，以防页面不完整
+            self.favcat_map.update(favcat_map)
+
+        return favcat_map
+
+    def _extract_thumbnail_galleries(self, soup: BeautifulSoup) -> list:
+        galleries = []
+        gallery_elements = soup.select('div.gl1t')
+        for gallery in gallery_elements:
+            info = {}
+            title_element = gallery.select_one('a > span.glink')
+            if title_element:
+                info['title'] = title_element.get_text(strip=True)
+                info['url'] = title_element.parent['href']
+            thumb_element = gallery.select_one('div.gl3t img')
+            if thumb_element:
+                info['thumbnail_url'] = thumb_element['src']
+            gl5t_divs = gallery.select('div.gl5t > div > div')
+            for div in gl5t_divs:
+                if 'cs' in div.get('class', []):
+                    info['category'] = div.get_text(strip=True)
+                elif div.get('id', '').startswith('posted_'):
+                    info['posted_date'] = div.get_text(strip=True)
+                    info['favcat_title'] = div.get('title', '')
+                elif 'pages' in div.get_text(strip=True):
+                    info['pages'] = div.get_text(strip=True)
+            tags = gallery.select('div.gl6t > div.gt')
+            info['tags'] = [tag.get('title', '') for tag in tags]
+            if info:
+                galleries.append(info)
+        return galleries
+
+    def _extract_minimal_galleries(self, soup: BeautifulSoup) -> list:
+        galleries = []
+        gallery_elements = soup.select('table[class^="itg gltm"] tr')
+        for row in gallery_elements:
+            if not row.find('td', class_='gl1m'):
+                continue
+            info = {}
+            title_element = row.select_one('td.gl3m a > div.glink')
+            if title_element:
+                info['title'] = title_element.get_text(strip=True)
+                info['url'] = title_element.parent['href']
+            thumb_element = row.select_one('div.glthumb img')
+            if thumb_element:
+                info['thumbnail_url'] = thumb_element.get('data-src') or thumb_element.get('src')
+            category_element = row.select_one('td.gl1m.glcat > div.cs')
+            if category_element:
+                info['category'] = category_element.get_text(strip=True)
+            posted_element = row.select_one('td.gl2m > div[id^="posted_"]')
+            if posted_element:
+                info['posted_date'] = posted_element.get_text(strip=True)
+                info['favcat_title'] = posted_element.get('title', '')
+            tags = row.select('div.gltm > div.gt')
+            info['tags'] = [tag.get('title', '') for tag in tags]
+            if info:
+                galleries.append(info)
+        return galleries
+
+    def _extract_compact_galleries(self, soup: BeautifulSoup) -> list:
+        galleries = []
+        gallery_elements = soup.select('table[class^="itg gltc"] tr')
+        for row in gallery_elements:
+            if not row.find('td', class_='gl1c'):
+                continue
+            info = {}
+            title_element = row.select_one('td.gl3c a > div.glink')
+            if title_element:
+                info['title'] = title_element.get_text(strip=True)
+                info['url'] = title_element.parent['href']
+            thumb_element = row.select_one('div.glthumb img')
+            if thumb_element:
+                info['thumbnail_url'] = thumb_element.get('data-src') or thumb_element.get('src')
+            category_element = row.select_one('td.gl1c.glcat > div.cn')
+            if category_element:
+                info['category'] = category_element.get_text(strip=True)
+            posted_element = row.select_one('td.gl2c > div > div[id^="posted_"]')
+            if posted_element:
+                info['posted_date'] = posted_element.get_text(strip=True)
+                info['favcat_title'] = posted_element.get('title', '')
+            tags = row.select('td.gl3c.glname div.gt')
+            info['tags'] = [tag.get('title', '') for tag in tags]
+            authors = [tag.text for tag in tags if tag.get('title', '').startswith('artist:')]
+            if authors:
+                info['author'] = ' / '.join(authors)
+            if info:
+                galleries.append(info)
+        return galleries
+
+    def _extract_extended_galleries(self, soup: BeautifulSoup) -> list:
+        galleries = []
+        gallery_elements = soup.select('table[class^="itg glte"] tr')
+        for row in gallery_elements:
+            if not row.find('td', class_='gl1e'):
+                continue
+            info = {}
+            link_element = row.select_one('td.gl1e a')
+            if link_element:
+                info['url'] = link_element['href']
+                thumb_element = link_element.select_one('img')
+                if thumb_element:
+                    info['title'] = thumb_element.get('title', '')
+                    info['thumbnail_url'] = thumb_element['src']
+            category_element = row.select_one('div.gl3e div.cn')
+            if category_element:
+                info['category'] = category_element.get_text(strip=True)
+            posted_element = row.select_one('div[id^="posted_"]')
+            if posted_element:
+                info['posted_date'] = posted_element.get_text(strip=True)
+                info['favcat_title'] = posted_element.get('title', '')
+            tags = row.select('div.gl4e table div[title]')
+            info['tags'] = [tag.get('title', '') for tag in tags]
+            authors = [tag.text for tag in tags if tag.get('title', '').startswith('artist:')]
+            if authors:
+                info['author'] = ' / '.join(authors)
+            if info:
+                galleries.append(info)
+        return galleries
+
+    def _parse_favorites_page(self, soup: BeautifulSoup, favcat: str) -> tuple[str, list]:
+        layout = self._get_layout(soup)
+        self._build_favcat_map(soup)  # 更新收藏夹列表缓存
+        galleries_data = []
+        if layout == 'thumbnail':
+            galleries_data = self._extract_thumbnail_galleries(soup)
+        elif layout == 'minimal':
+            galleries_data = self._extract_minimal_galleries(soup)
+        elif layout == 'compact':
+            galleries_data = self._extract_compact_galleries(soup)
+        elif layout == 'extended':
+            galleries_data = self._extract_extended_galleries(soup)
+
+        if galleries_data:
+            for gallery in galleries_data:
+                gallery['favcat'] = favcat # 直接使用传入的 favcat ID
+        return layout, galleries_data
+
+    def get_favcat_list(self) -> list:
+        """获取用户收藏夹列表, 如果缓存为空则主动获取"""
+        if not self.favcat_map:
+            if self.logger:
+                self.logger.info("收藏夹缓存为空, 正在主动获取...")
+            url = "https://exhentai.org/favorites.php"
+            try:
+                response = self.session.get(url, allow_redirects=True, timeout=10)
+                if response.status_code == 200:
+                    soup = BeautifulSoup(response.text, 'html.parser')
+                    # _build_favcat_map 会自动更新 self.favcat_map
+                    self._build_favcat_map(soup)
+                    if self.logger:
+                        self.logger.info(f"成功获取并缓存了 {len(self.favcat_map)} 个收藏夹分类。")
+                else:
+                    if self.logger:
+                        self.logger.error(f"获取收藏夹列表失败: status_code={response.status_code}")
+            except requests.RequestException as e:
+                if self.logger:
+                    self.logger.error(f"获取收藏夹列表时发生网络错误: {e}")
+
+        # 无论如何都从当前缓存返回
+        # 转换成前端需要的格式 [{'id': k, 'name': 'k: v'}, ...]
+        favcat_list = [
+            {'id': k, 'name': f"{k}: {v}"}
+            for k, v in self.favcat_map.items()
+        ]
+        
+        if favcat_list:
+            favcat_list.sort(key=lambda x: int(x['id']))
+        return favcat_list
+
+    def get_favorites(self, favcat_list: list) -> list:
+        all_galleries = []
+        for favcat in favcat_list:
+            page_num = 0
+            while True:
+                url = f"https://exhentai.org/favorites.php?favcat={favcat}&page={page_num}"
+                if self.logger:
+                    self.logger.info(f"正在获取收藏夹: favcat={favcat}, page={page_num}")
+                
+                response = self.session.get(url, allow_redirects=True, timeout=10)
+                if response.status_code != 200:
+                    if self.logger:
+                        self.logger.error(f"获取收藏夹页面失败: {url}, status_code: {response.status_code}")
+                    break
+                
+                soup = BeautifulSoup(response.text, 'html.parser')
+                _, galleries_data = self._parse_favorites_page(soup, favcat)
+                
+                if galleries_data:
+                    all_galleries.extend(galleries_data)
+                
+                # 检查是否有下一页
+                # 通过查找指向下一页的 '>' 按钮来判断
+                next_button = soup.select_one('a[onclick="return false"]')
+                if not next_button or next_button.text != '>':
+                    break
+                
+                page_num += 1
+                
+        return all_galleries
+
+    def add_to_favorites(self, gid: int, token: str, favcat: str = '1', note: str = '') -> bool:
+        """将画廊添加到收藏夹"""
+        url = f"https://exhentai.org/gallerypopups.php?gid={gid}&t={token}&act=addfav"
+        form_data = {
+            "favcat": favcat,
+            "apply": "Apply Changes",
+            "favnote": note,
+            "update": "1"
+        }
+        try:
+            response = self.session.post(url, data=form_data, timeout=10)
+            if response.status_code == 200:
+                if self.logger:
+                    self.logger.info(f"成功将 gid={gid} 添加到收藏夹 (favcat={favcat})")
+                return True
+            else:
+                if self.logger:
+                    self.logger.error(f"将 gid={gid} 添加到收藏夹失败: status_code={response.status_code}, response={response.text}")
+                return False
+        except requests.RequestException as e:
+            if self.logger:
+                self.logger.error(f"将 gid={gid} 添加到收藏夹时发生网络错误: {e}")
+            return False
+
+    def delete_from_favorites(self, gid: str) -> bool:
+        """从收藏夹中删除画廊"""
+        url = "https://e-hentai.org/favorites.php"
+        form_data = {
+            "ddact": "delete",
+            "modifygids[]": str(gid)
+        }
+        try:
+            response = self.session.post(url, data=form_data, timeout=10)
+            if response.status_code == 200:
+                if self.logger:
+                    self.logger.info(f"成功从收藏夹中删除 gid={gid}")
+                return True
+            else:
+                if self.logger:
+                    self.logger.error(f"从收藏夹中删除 gid={gid} 失败: status_code={response.status_code}, response={response.text}")
+                return False
+        except requests.RequestException as e:
+            if self.logger:
+                self.logger.error(f"从收藏夹中删除 gid={gid} 时发生网络错误: {e}")
+            return False

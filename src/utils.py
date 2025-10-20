@@ -123,3 +123,14 @@ def get_task_logger(task_id=None):
     logger.addHandler(ch)
 
     return logger
+
+def parse_gallery_url(url: str) -> tuple[int | None, str | None]:
+    """从 E-Hentai/ExHentai 画廊 URL 中解析 gid 和 token"""
+    if not isinstance(url, str):
+        return None, None
+    match = re.search(r'/g/(\d+)/([a-f0-9]{10})', url)
+    if match:
+        gid = int(match.group(1))
+        token = match.group(2)
+        return gid, token
+    return None, None

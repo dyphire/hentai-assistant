@@ -29,7 +29,10 @@ def get_default_config():
             'openai_series_detection': 'false' # 启用后，使用配置号的 OpenAI 接口对标题进行系列名和序号的检测。
         },
         'ehentai': {
-            'cookie': ''
+            'cookie': '',
+            'favorite_sync': 'false',
+            'interval_hours': '6',
+            'listen_categories': ''
         },
         'nhentai': {
             'cookie': ''
@@ -92,6 +95,43 @@ def lowercase_keys(obj):
         return [lowercase_keys(elem) for elem in obj]
     return obj
 
+def deep_merge_dicts(source, defaults):
+    """
+    Recursively merges a `source` dictionary into a `defaults` dictionary.
+    - If a key from `defaults` is missing in `source`, it's added.
+    - If values are dictionaries, they are merged recursively.
+    - `source` values take precedence.
+    - Returns the merged dictionary and a boolean indicating if changes were made.
+    """
+    updated = False
+    merged = defaults.copy()
+
+    for key, default_value in defaults.items():
+        if key not in source:
+            updated = True
+            continue  # Keep the default value, no need to assign merged[key] = default_value
+
+        source_value = source[key]
+        
+        # If both values are dictionaries, recurse
+        if isinstance(default_value, dict) and isinstance(source_value, dict):
+            merged[key], sub_updated = deep_merge_dicts(source_value, default_value)
+            if sub_updated:
+                updated = True
+        # Otherwise, use the source value, but check if it's different from default
+        # This handles cases where user has a value, but we might want to ensure it is the right type later
+        else:
+            merged[key] = source_value
+
+    # Also, add keys from source that are not in defaults (e.g., user-defined notifiers)
+    for key, source_value in source.items():
+        if key not in defaults:
+            merged[key] = source_value
+            # This is not considered an 'update' in the sense of adding missing defaults
+            
+    return merged, updated
+
+
 def load_config():
     # 加载 config.yaml 文件，如果不存在则创建并使用默认值
     default_config = get_default_config()
@@ -104,53 +144,15 @@ def load_config():
     try:
         with open(CONFIG_PATH, 'r', encoding='utf-8') as configfile:
             user_config_raw = yaml.safe_load(configfile) or {}
-            if not isinstance(user_config_raw, dict):
-                raise ValueError("Config file is not a valid dictionary.")
-            user_config = lowercase_keys(user_config_raw)
+        if not isinstance(user_config_raw, dict):
+            raise ValueError("Config file is not a valid dictionary.")
+        user_config = lowercase_keys(user_config_raw)
     except Exception as e:
         print(f"Error reading or parsing config file '{CONFIG_PATH}', using default config: {e}")
         return default_config
 
-    config_data = get_default_config()
-    config_updated = False
-
-    # 将用户配置合并到默认配置中
-    for section, section_items in user_config.items():
-        if section in config_data and isinstance(section_items, dict):
-            # If the default section is empty, it's likely a dictionary of user-defined objects.
-            # In this case, we update the empty dict with the user's dict.
-            if not config_data[section]:
-                 config_data[section].update(section_items)
-            else:
-                # Otherwise, merge key by key.
-                for key, value in section_items.items():
-                    if key in config_data[section]:
-                        config_data[section][key] = value
-    
-    # 检查并补充缺失的配置项
-    default_config_for_check = get_default_config()
-    for section, section_items in default_config_for_check.items():
-        if section not in config_data:
-            config_data[section] = section_items
-            config_updated = True
-        elif isinstance(section_items, dict):
-            for key, value in section_items.items():
-                if key not in config_data[section]:
-                    config_data[section][key] = value
-                    config_updated = True
-
-    # 增强布尔值转换逻辑
-    TRUE_VALUES = {'true', 'yes', 'on', '1'}
-    FALSE_VALUES = {'false', 'no', 'off', '0'}
-
-    for section in config_data:
-        for key, value in config_data[section].items():
-            if isinstance(value, str):
-                lower_value = value.lower()
-                if lower_value in TRUE_VALUES:
-                    config_data[section][key] = True
-                elif lower_value in FALSE_VALUES:
-                    config_data[section][key] = False
+    # Deep merge user config with defaults
+    config_data, config_updated = deep_merge_dicts(user_config, default_config)
 
     # Special handling for the notification section to ensure each notifier has default fields
     if 'notification' in config_data and isinstance(config_data['notification'], dict):
@@ -163,8 +165,46 @@ def load_config():
                     notifier_details['name'] = notifier_key # Default name to its key
                     config_updated = True
 
+    # If any missing keys were added, save the updated config back to the file
     if config_updated:
-        print(f"Config file '{CONFIG_PATH}' has been updated with missing entries.")
+        print(f"Config file '{CONFIG_PATH}' has been updated with missing default entries.")
         save_config(config_data)
+        
+    # --- Type Conversion (from string to boolean, etc.) ---
+    # This should happen *after* loading and merging, before returning.
+    
+    TRUE_VALUES = {'true', 'yes', 'on', '1', True}
+    FALSE_VALUES = {'false', 'no', 'off', '0', False}
 
-    return config_data
+    # Create a new dictionary for the converted data to avoid modifying during iteration
+    converted_config = {}
+    for section, section_items in config_data.items():
+        if not isinstance(section_items, dict):
+            converted_config[section] = section_items
+            continue
+        
+        converted_section = {}
+        for key, value in section_items.items():
+            if isinstance(value, str):
+                lower_value = value.lower()
+                if lower_value in TRUE_VALUES:
+                    converted_section[key] = True
+                elif lower_value in FALSE_VALUES:
+                    converted_section[key] = False
+                else:
+                    converted_section[key] = value
+            else: # if not a string
+                converted_section[key] = value
+        converted_config[section] = converted_section
+
+    # --- Final Validation ---
+    eh_config = converted_config.get('ehentai', {})
+    try:
+        interval = float(eh_config.get('interval_hours'))
+        if interval <= 0:
+            raise ValueError("Interval must be positive")
+    except (ValueError, TypeError, AttributeError):
+        eh_config['interval_hours'] = 24
+        logging.warning("Invalid 'ehentai.interval_hours'. Falling back to default 24 hours.")
+
+    return converted_config
