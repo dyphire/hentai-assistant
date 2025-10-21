@@ -321,6 +321,7 @@ def check_config():
                 start_notification_process()
 
     app.config['HATH_TOGGLE'] = hath_toggle
+    app.config['EXH_VALID'] = exh_valid
     app.config['NH_TOGGLE'] = nh_toggle
     app.config['ARIA2_TOGGLE'] = aria2_toggle
     app.config['KOMGA_TOGGLE'] = komga_toggle
@@ -381,13 +382,10 @@ def get_eh_mode(config, mode):
     if hath[0] and not aria2:
         return "archive"
     if aria2 and download_torrent:
-        if hath[0]:
-            return "both"
-        else:
-            return "torrent"
+        return "torrent"
     elif hath[0]:
         return "archive"
-    return "both"
+    return "torrent"
 
 def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_id=None):
     # 检查任务是否被取消
@@ -619,15 +617,13 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
         # ehentai 下载模式选择
         eh_mode = get_eh_mode(app.config, mode)
         # exhentai 限定的画廊在一些情况下能被 e-hentai 检索，但并不能通过 e-hentai 访问，因此当 exhentai 可用时，积极替换成 exhentai 的链接。
-        eh_valid, exh_valid, eh_funds = gallery_tool.is_valid_cookie()
-        if exh_valid: url = url.replace("e-hentai.org", "exhentai.org")
-        else: url = url.replace("exhentai.org", "e-hentai.org")     
-        # 顺便更新 GP 余额
-        update_eh_funds(eh_funds)
+        if app.config.get('EXH_VALID'):
+            url = url.replace("e-hentai.org", "exhentai.org")
+        else:
+            url = url.replace("exhentai.org", "e-hentai.org")
         result = gallery_tool.get_download_link(url=url, mode=eh_mode)
-
         check_task_cancelled(task_id)
-
+                
         if result:
             if result[0] == 'torrent':
                 dl = send_to_aria2(torrent=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
@@ -636,17 +632,16 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
                     result = gallery_tool.get_download_link(url=url, mode='archive')
                     dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
             elif result[0] == 'archive':
-                if not app.config.get('ARIA2_TOGGLE'):
-                    dl = gallery_tool._download(
-                        url=result[1],
-                        path=path,
-                        task_id=task_id,
-                        tasks=tasks,
-                        tasks_lock=tasks_lock
-                    )
-                else:
+                if app.config.get('ARIA2_TOGGLE'):
                     dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
-
+                else:
+                    dl = gallery_tool._download(url=result[1], path=path, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
+        else:
+            # 对于被删除的画廊，尝试从 API 中找到有效的种子链接
+            # 从 gmetadata.torrents 中找到日期最新的记录中的 hash 值
+            torrent_path = gallery_tool.get_deleted_gallery_torrent(gmetadata)
+            # 再将种子推送到 aria2, 种子将会下载到 dir
+            dl = send_to_aria2(torrent=torrent_path, dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
     check_task_cancelled(task_id)
     
     # 处理元数据
@@ -1170,7 +1165,6 @@ def handle_favorite_downloaded(data):
             global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已下载 (Komga Book ID 未提供)。")
             return json_response({'message': f'Favorite (gid: {gid}) marked as downloaded.'}), 200
         else:
-            global_logger.warning(f"无法将收藏夹项目 (gid: {gid}) 标记为已下载 (可能该收藏在本地不存在)。")
             return json_response({'message': 'Favorite not found or already marked as downloaded.'}), 404
 
     success = task_db.update_favorite_komga_id(gid, komga_book_id)
@@ -1178,7 +1172,6 @@ def handle_favorite_downloaded(data):
         global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已同步到 Komga (Book ID: {komga_book_id})。")
         return json_response({'message': f'Favorite (gid: {gid}) marked as synced with Komga book ID {komga_book_id}.'}), 200
     else:
-        global_logger.warning(f"无法将收藏夹项目 (gid: {gid}) 标记为已同步 (可能该收藏在本地不存在)。")
         return json_response({'message': 'Favorite not found or failed to mark as synced.'}), 404
 
 def handle_favorite_deleted(data):

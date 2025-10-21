@@ -1,4 +1,4 @@
-import re, os, json
+import re, os, json, time
 import requests
 from bs4 import BeautifulSoup
 
@@ -10,9 +10,10 @@ headers = {
 }
 
 def get_original_tag(text):
-    dictpath = check_dirs('data/ehentai/translations/')
-    if os.path.isfile(dictpath + 'tags.json'):
-        with open(dictpath + 'tags.json', 'r', encoding='utf-8') as rf:
+    dictpath = check_dirs(os.path.join('data', 'ehentai', 'translations'))
+    tags_json_path = os.path.join(dictpath, 'tags.json')
+    if os.path.isfile(tags_json_path):
+        with open(tags_json_path, 'r', encoding='utf-8') as rf:
             tagsdict = json.load(rf)
     else:
         tagsdict = {}
@@ -25,23 +26,27 @@ def get_original_tag(text):
         searchJapanese = re.search(r'Japanese</b>:\s*(.+?)<', response.text)
         if not searchJapanese == None:
             tagsdict[text] = re.sub(' ','',searchJapanese.group(1))
-            with open(check_dirs(dictpath) + 'tags.json', 'w', encoding='utf-8') as wf:
+            with open(tags_json_path, 'w', encoding='utf-8') as wf:
                 json.dump(tagsdict, wf, ensure_ascii=False, indent=4)
             return tagsdict[text]
 
 def male_only_taglist():
-    json_path = os.path.join(check_dirs("data/ehentai/tags"), "male_only_taglist.json")
+    data_dir = check_dirs(os.path.join("data", "ehentai"))
+    json_path = os.path.join(data_dir, "tags", "male_only_taglist.json")
     if os.path.exists(json_path):
         with open(json_path) as f:
             return json.load(f)['content']
     m_list = []
-    if not os.path.exists("data/ehentai/fetish_listing.html"):
+    
+    fetish_html_path = os.path.join(data_dir, "fetish_listing.html")
+    if not os.path.exists(fetish_html_path):
         url = "https://ehwiki.org/wiki/Fetish_Listing"
         response = requests.get(url, headers=headers)
         if response.status_code == 200:
-            with open("data/ehentai/fetish_listing.html", 'w') as f:
+            with open(fetish_html_path, 'w') as f:
                 f.write(response.text)
-    with open("data/ehentai/fetish_listing.html") as f:
+    
+    with open(fetish_html_path) as f:
         soup = BeautifulSoup(f, 'html.parser')
         # 查找所有带有 "♂" 的 <a> 标签
         for a_tag in soup.find_all('a'):
@@ -144,18 +149,14 @@ class EHentaiTools:
             response = self.session.post(API,json=data)
             if response.status_code == 200:
                 if self.logger: self.logger.info(response.json())
-                with open(check_dirs('data/ehentai/gmetadata/') + '{gid}.json'.format(gid=gid), 'w+', encoding='utf-8') as wf:
+                gmetadata_dir = check_dirs(os.path.join('data', 'ehentai', 'gmetadata'))
+                with open(os.path.join(gmetadata_dir, f'{gid}.json'), 'w+', encoding='utf-8') as wf:
                     json.dump(response.json(),wf,ensure_ascii=False,indent=4)
                 return response.json()['gmetadata'][0]
         else:
             if self.logger: self.logger.error(f'解析{url}时遇到了错误')
 
     def _download(self, url, path, task_id=None, tasks=None, tasks_lock=None):
-        eh_valid, exh_valid, _ = self.is_valid_cookie()
-        if exh_valid:
-            url = url.replace("e-hentai.org", "exhentai.org")
-        else:
-            url = url.replace("exhentai.org", "e-hentai.org")
         try:
             with self.session.get(url, stream=True, timeout=30) as r:
                 r.raise_for_status()
@@ -202,6 +203,81 @@ class EHentaiTools:
             if self.logger:
                 self.logger.error(f"下载失败: {e}")
             return None
+        
+    def _download_torrent(self, torrent_url, torrent_name):
+        try:
+            if self.logger: self.logger.info(f"尝试下载种子: {torrent_url}")
+            response = self.session.get(torrent_url, timeout=10)
+            
+            # 即使 gid 错误, ehtracker 也会返回 200, 但内容是 HTML。
+            # 因此需要通过 Content-Type 来判断是否是真正的种子文件。
+            content_type = response.headers.get('Content-Type', '').lower()
+            if response.status_code == 200 and 'text/html' not in content_type:
+                torrents_dir = check_dirs(os.path.join('.', 'data', 'ehentai', 'torrents'))
+                torrent_path = os.path.join(torrents_dir, torrent_name)
+                with open(torrent_path, 'wb') as f:
+                    f.write(response.content)
+                
+                # 在文件系统层面验证文件是否有效
+                if os.path.isfile(torrent_path) and os.path.getsize(torrent_path) > 0:
+                    if self.logger: self.logger.info(f"种子下载并验证成功: {torrent_path}")
+                    return torrent_path
+                else:
+                    if self.logger: self.logger.warning(f"种子文件写入失败或为空: {torrent_path}")
+                    return None
+            else:
+                if self.logger:
+                    self.logger.warning(f"下载种子失败(gid可能无效): {torrent_url}, status: {response.status_code}, content-type: {content_type}")
+                return None
+        except requests.RequestException as e:
+            if self.logger: self.logger.error(f"下载种子时发生网络错误: {torrent_url}, error: {e}")
+            return None
+
+    def get_deleted_gallery_torrent(self, gmetadata):
+        if not (gmetadata and gmetadata.get('torrents')):
+            return
+        torrents_list = gmetadata['torrents']
+        if not torrents_list:
+            if self.logger: self.logger.info("该画廊没有可用的种子文件。")
+            return
+
+        # 从最新到最旧排序种子, 优先尝试最新的
+        sorted_torrents = sorted(torrents_list, key=lambda t: int(t.get('added', '0')), reverse=True)
+        
+        # 准备要尝试的 gids, 保持顺序
+        ordered_gids = [
+            gmetadata.get('gid'),
+            gmetadata.get('parent_gid'),
+            gmetadata.get('first_gid')
+        ]
+        valid_gids = [gid for gid in ordered_gids if gid is not None]
+
+        torrent_path = None
+        # 外层循环: 遍历所有种子 (从新到旧)
+        for torrent in sorted_torrents:
+            torrent_hash = torrent.get('hash')
+            torrent_name = torrent.get('name')
+
+            if not (torrent_hash and torrent_name):
+                continue # 跳过无效的种子条目
+
+            # 内层循环: 遍历所有有效的 gid
+            for gid in valid_gids:
+                torrent_url = f'https://ehtracker.org/get/{gid}/{torrent_hash}.torrent'
+                torrent_path = self._download_torrent(torrent_url=torrent_url, torrent_name=torrent_name)
+                if torrent_path:
+                    if self.logger:
+                        self.logger.info(f"成功下载种子: 使用 gid={gid} 和 hash={torrent_hash}")
+                    break  # 成功, 退出内层循环
+                
+                # 为避免对服务器造成过大压力, 在每次失败的尝试后增加1秒延迟
+                time.sleep(1)
+            
+            if torrent_path:
+                return torrent_path
+        
+        if not torrent_path and self.logger:
+            self.logger.warning(f"尝试了 {len(sorted_torrents)} 个种子和 {len(valid_gids)} 个gids, 仍未找到可用的种子文件。")
 
     def get_download_link(self, url, mode):
         response = self.session.get(url)
@@ -215,10 +291,10 @@ class EHentaiTools:
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.text, 'html.parser')
                 else:
-                    if self.logger: self.logger.error("添加 'nw=always' 参数后请求失败，请仔细排查问题")
+                    if self.logger: self.logger.error("添加 'nw=always' 参数后请求失败，请仔细联系脚本维护者排查问题")
                     return None, None
             # 先看看 Torrent 情况
-            if mode == "torrent" or mode == "both": # 下载种子需要开启 aria2
+            if not mode == 'archive':
                 torrent_a_tag = soup.find("a", string=lambda text: text and "Torrent Download" in text,onclick=True)
                 # 提取链接
                 if torrent_a_tag:
@@ -264,17 +340,11 @@ class EHentaiTools:
                                 if self.logger: self.logger.info(f"共找到{len(torrent_list)}个有效种子, 本次选择, {max_seeds_torrent}")
                                 
                                 # 将种子下载至本地
-                                torrent = self.session.get(max_seeds_torrent['link'])
-                                torrent_path = os.path.join(check_dirs('./data/ehentai/torrents'), max_seeds_torrent['name'])
-                                with open(torrent_path, 'wb') as f:
-                                    if self.logger: self.logger.info(f"开始下载: {max_seeds_torrent['link']} ==> {torrent_path}")
-                                    f.write(torrent.content)
+                                torrent_path = self._download_torrent(torrent_url=max_seeds_torrent['link'], torrent_name=max_seeds_torrent['name'])
                                 # 再将种子推送到 aria2, 种子将会下载到 dir
                                 return 'torrent', torrent_path
                             else:
                                 if self.logger: self.logger.warning("未找到任何有效种子。")
-            if mode == "archive" or mode == "both":
-                # 直接使用GP下载Archive
                 # 获取 Archive
                 if self.logger: self.logger.info('\n开始进行 Archive Download')
                 archive_a_tag = soup.find("a", string="Archive Download",onclick=True)
@@ -295,8 +365,6 @@ class EHentaiTools:
                 }
                 try:
                     response = self.session.post(download_url, data)
-                    # 保存请求页面用于调试
-                    # with open('data/ehentai/download.html', 'w+', encoding='utf-8') as f: f.write(response.text)
                     a_soup = BeautifulSoup(response.text, 'html.parser')
                     # 查找所有带有 onclick 属性的 <a> 标签
                     a_tags_with_onclick = a_soup.find_all('a', onclick=True)
@@ -535,12 +603,14 @@ class EHentaiTools:
                     break
                 
                 page_num += 1
+                # 增加延迟，避免请求过于频繁
+                time.sleep(1)
                 
         return all_galleries
 
     def add_to_favorites(self, gid: int, token: str, favcat: str = '1', note: str = '') -> bool:
         """将画廊添加到收藏夹"""
-        url = f"https://exhentai.org/gallerypopups.php?gid={gid}&t={token}&act=addfav"
+        url = f"https://e-hentai.org/gallerypopups.php?gid={gid}&t={token}&act=addfav"
         form_data = {
             "favcat": favcat,
             "apply": "Apply Changes",

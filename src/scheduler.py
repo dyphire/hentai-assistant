@@ -212,13 +212,10 @@ def update_scheduler_jobs(app):
                 func=sync_eh_favorites_job,
                 trigger='interval',
                 hours=sync_interval,
-                misfire_grace_time=3600,
-                next_run_time=datetime.now()  # 关键：设置立即执行
+                misfire_grace_time=3600
             )
             if existing_job:
                 app.logger.info(f"E-Hentai 收藏夹同步任务已更新，将立即执行一次，然后按每 {sync_interval} 小时的间隔运行。")
-            else:
-                app.logger.info(f"E-Hentai 收藏夹同步任务已启用，将立即执行一次，然后按每 {sync_interval} 小时的间隔运行。")
         else:
             # 如果功能被禁用，日志会告知用户任务已被移除（如果它之前存在）
             if existing_job:
