@@ -67,21 +67,15 @@ def send_apprise(notifiers, event, data, logger=None):
     if event == 'komga.new':
         title = "Komga 新书入库"
         message_list = [
-            f"书名: {data.get('name')}",
-            f"作者: {', '.join(data.get('metadata', {}).get('authors', []))}",
-            f"系列: {data.get('metadata', {}).get('series', 'N/A')}",
-            f"标签: {', '.join(data.get('metadata', {}).get('tags', []))}",
-            f"语言: {data.get('metadata', {}).get('language', 'N/A')}",
-            f"页数: {data.get('metadata', {}).get('pages', 'N/A')}",
-            f"添加时间: {data.get('addedAt', 'N/A')}",
-            f"链接: {data.get('url', 'N/A')}"
+            f"标题: {data.get('name')}",
+            f"书籍ID: {data.get('id')}",
+            f"系列ID: {data.get('seriesId')}"
         ]
     elif event == 'komga.delete':
         title = "Komga 书籍已删除"
         message_list = [
             f"书籍ID: {data.get('id')}",
-            f"系列ID: {data.get('seriesId')}",
-            f"书库ID: {data.get('libraryId')}"
+            f"系列ID: {data.get('seriesId')}"
         ]
     else:
         title = f"Hentai Assistant 任务通知 - {event}"
@@ -176,7 +170,14 @@ def listen_event(komga_server: str, komga_username: str, komga_password: str, no
                     }
                 # For new books, fetch full details.
                 elif event_type == 'ThumbnailBookAdded':
-                    book_data = KomgaAPI(komga_server, komga_username, komga_password, logger=listener_logger).get_book(book_id).json()
+                    api = KomgaAPI(komga_server, komga_username, komga_password, logger=listener_logger)
+                    book_response = api.get_book(book_id)
+                    if book_response.status_code == 200:
+                        book_data = book_response.json()
+                        book_data['url'] = f"{komga_server}/book/{book_id}"
+                    else:
+                        listener_logger.error(f"无法获取书籍 {book_id} 的详细信息, status code: {book_response.status_code}")
+                        book_data = {} # 重置 book_data 以避免发送不完整的通知
                 
                 # Call the unified notify function if book_data is not empty
                 if book_data:
