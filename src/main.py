@@ -172,11 +172,12 @@ def get_task_logger(task_id):
 def update_eh_funds(eh_funds):
     """更新 eh_funds 到 app.config 和数据库"""
     if eh_funds is not None:
-        # 始终将 eh_funds 构造成字典以提高可扩展性
-        eh_funds_dict = {'GP': eh_funds}
-        app.config['EH_FUNDS'] = eh_funds_dict
-        task_db.set_global_state('eh_funds', json.dumps(eh_funds_dict))
-        global_logger.info(f"E-Hentai GP 余额已更新: {eh_funds_dict['GP']}")
+        # eh_funds 现在是包含 GP 和 Credits 的字典
+        app.config['EH_FUNDS'] = eh_funds
+        task_db.set_global_state('eh_funds', json.dumps(eh_funds))
+        gp = eh_funds.get('GP', '-')
+        credits = eh_funds.get('Credits', '-')
+        global_logger.info(f"E-Hentai 余额已更新: GP={gp}, Credits={credits}")
 
 def check_config():
     """检查并加载应用配置，并根据配置变化管理通知子进程。"""
@@ -934,7 +935,7 @@ def get_config():
         'komga_toggle': app.config.get('KOMGA_TOGGLE', False),
         'notification_toggle': notification_process is not None and notification_process.poll() is None,
         'notification_pid': notification_process.pid if notification_process and notification_process.poll() is None else None,
-        'eh_funds': app.config.get('EH_FUNDS', {'GP': '-'})
+        'eh_funds': app.config.get('EH_FUNDS', {'GP': '-', 'Credits': '-'})
     }
     return json_response(config_data)
 

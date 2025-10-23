@@ -121,10 +121,10 @@ class EHentaiTools:
     def is_valid_cookie(self):
         # 先检查 E-Hentai
         eh_valid, eh_funds = self._check_url(
-            "https://e-hentai.org/home.php",
+            "https://e-hentai.org/exchange.php?t=gp",
             "E-Hentai",
-            "无法访问 https://e-hentai.org/home.php, Archive 下载功能将不可用",
-            "成功访问 https://e-hentai.org/home.php, Archive 下载功能可用"
+            "无法访问 https://e-hentai.org/exchange.php?t=gp, Archive 下载功能将不可用",
+            "成功访问 https://e-hentai.org/exchange.php?t=gp, Archive 下载功能可用"
         )
         # 再检查 ExHentai
         exh_valid, _ = self._check_url(
@@ -138,30 +138,52 @@ class EHentaiTools:
         return eh_valid, exh_valid, eh_funds
 
     def get_funds(self, html_text):
+        """
+        从 exchange.php 页面解析 GP 和 Credits
+        返回格式: {'GP': str, 'Credits': int} 或 None
+        GP 会带上 'k' 单位，例如 "158k"
+        """
         soup = BeautifulSoup(html_text, 'html.parser')
-        h2_tag = soup.find('h2', string='Total GP Gained')
-        if h2_tag:
-            homebox_div = h2_tag.find_next_sibling('div', class_='homebox')
-            if homebox_div:
-                table = homebox_div.find('table')
-                if table:
-                    total_gp = 0
-                    # 遍历表格中的每一行
-                    for row in table.find_all('tr'):
-                        # GP 数值通常在每行的第一个 <td> 标签中
-                        td = row.find('td')
-                        if td:
-                            gp_text = td.get_text(strip=True)
-                            if gp_text:
-                                try:
-                                    # 移除逗号并转换为整数
-                                    total_gp += int(gp_text.replace(',', ''))
-                                except ValueError:
-                                    # 如果转换失败，可能不是数字，记录警告并跳过
-                                    if self.logger:
-                                        self.logger.warning(f"无法从 '{gp_text}' 中解析 GP 数值")
-                    return total_gp
-        return None
+        funds = {}
+        
+        try:
+            # 直接查找所有包含 "Available:" 的 div（更高效）
+            all_divs = soup.find_all('div', string=re.compile(r'Available:'))
+            
+            for div in all_divs:
+                text = div.get_text(strip=True)
+                
+                # 解析 Credits: "Available: 95,436 Credits"
+                if 'Credits' in text:
+                    match = re.search(r'Available:\s*([\d,]+)\s*Credits', text)
+                    if match:
+                        credits_str = match.group(1).replace(',', '')
+                        funds['Credits'] = int(credits_str)
+                        if self.logger:
+                            self.logger.info(f"解析到 Credits: {funds['Credits']}")
+                
+                # 解析 GP: "Available: 158,707 kGP"
+                if 'kGP' in text:
+                    match = re.search(r'Available:\s*([\d,]+)\s*kGP', text)
+                    if match:
+                        gp_value = match.group(1).replace(',', '')
+                        # 保存为带 'k' 单位的字符串
+                        funds['GP'] = f"{gp_value}k"
+                        if self.logger:
+                            self.logger.info(f"解析到 GP: {funds['GP']}")
+            
+            # 检查是否成功解析到两个值
+            if 'GP' in funds and 'Credits' in funds:
+                return funds
+            else:
+                if self.logger:
+                    self.logger.warning(f"未能完整解析 funds 数据，当前解析到: {funds}")
+                return funds if funds else None
+                
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"解析 funds 时发生错误: {e}")
+            return None
 
     # 从 E-Hentai API 获取画廊信息
     def get_gmetadata(self, url):

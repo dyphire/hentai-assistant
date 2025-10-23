@@ -23,6 +23,8 @@
 docker run -d \
   -p 5001:5001 \
   -v $(pwd)/data:/app/data \
+  -e PUID=$(id -u <your_username>) \
+  -e PGID=$(id -g <your_username>) \
   --name hentai-assistant \
   ghcr.io/rosystain/hentai-assistant:latest
 ```

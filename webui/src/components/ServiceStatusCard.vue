@@ -6,7 +6,10 @@
       <div class="status-item">
         <div class="service-info">
           <span class="service-name">E-Hentai</span>
-          <span class="service-details" v-if="status.eh_funds && status.eh_funds.GP !== undefined">GP: {{ status.eh_funds.GP }}</span>
+          <span class="service-details" v-if="status.eh_funds">
+            <span v-if="formattedGP">GP: {{ formattedGP }}</span>
+            <span v-if="formattedCredits"> | Cr: {{ formattedCredits }}</span>
+          </span>
         </div>
         <span class="status-badge" :class="ehentaiStatusClass()">{{ ehentaiStatusText() }}</span>
       </div>
@@ -31,7 +34,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, computed } from 'vue';
 import axios from 'axios';
 
 interface ConfigStatus {
@@ -43,6 +46,7 @@ interface ConfigStatus {
   notification_pid?: number;
   eh_funds?: {
     GP: number | string;
+    Credits: number | string;
   };
 }
 
@@ -57,6 +61,29 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 
 const API_BASE_URL = '/api';
+
+// 格式化数字，添加千分符
+const formatNumber = (value: number | string): string => {
+  if (value === undefined || value === null) return '0';
+  const num = typeof value === 'string' ? parseFloat(value) : value;
+  if (isNaN(num)) return '0';
+  return num.toLocaleString('en-US');
+};
+
+// 计算格式化后的 GP 和 Credits
+const formattedGP = computed(() => {
+  if (status.value.eh_funds?.GP !== undefined) {
+    return formatNumber(status.value.eh_funds.GP);
+  }
+  return null;
+});
+
+const formattedCredits = computed(() => {
+  if (status.value.eh_funds?.Credits !== undefined) {
+    return formatNumber(status.value.eh_funds.Credits);
+  }
+  return null;
+});
 
 const fetchStatus = async () => {
   loading.value = true;
