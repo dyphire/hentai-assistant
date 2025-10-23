@@ -33,30 +33,42 @@ def get_original_tag(text):
 
 def male_only_taglist():
     data_dir = check_dirs(os.path.join("data", "ehentai"))
-    json_path = os.path.join(data_dir, "tags", "male_only_taglist.json")
+    tags_dir = check_dirs(os.path.join(data_dir, "tags"))
+    json_path = os.path.join(tags_dir, "male_only_taglist.json")
+    
+    # 如果文件已存在，尝试读取
     if os.path.exists(json_path):
-        with open(json_path) as f:
-            return json.load(f)['content']
+        with open(json_path, encoding='utf-8') as f:
+            content = json.load(f).get('content', [])
+            # 确认列表不为空才返回
+            if content:
+                return content
+    
+    # 文件不存在或列表为空，从 ehwiki 下载并解析（不保存 HTML）
     m_list = []
+    url = "https://ehwiki.org/wiki/Fetish_Listing"
     
-    fetish_html_path = os.path.join(data_dir, "fetish_listing.html")
-    if not os.path.exists(fetish_html_path):
-        url = "https://ehwiki.org/wiki/Fetish_Listing"
-        response = requests.get(url, headers=headers)
+    try:
+        response = requests.get(url, headers=headers, timeout=30)
         if response.status_code == 200:
-            with open(fetish_html_path, 'w') as f:
-                f.write(response.text)
-    
-    with open(fetish_html_path) as f:
-        soup = BeautifulSoup(f, 'html.parser')
-        # 查找所有带有 "♂" 的 <a> 标签
-        for a_tag in soup.find_all('a'):
-            # 检查<a>标签后是否有 ♂
-            if a_tag.next_sibling and "♂" in a_tag.next_sibling:
-                m_list.append(a_tag.string.strip('\u200e'))
-    with open(json_path, 'w') as j:
-        json.dump({"content" : m_list}, j, indent=4)
-    return m_list
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # 查找所有带有 "♂" 的 <a> 标签
+            for a_tag in soup.find_all('a'):
+                # 检查<a>标签后是否有 ♂
+                if a_tag.next_sibling and "♂" in a_tag.next_sibling:
+                    tag_name = a_tag.string.strip('\u200e') if a_tag.string else None
+                    if tag_name:
+                        m_list.append(tag_name)
+            
+            # 保存到 JSON 文件
+            if m_list:
+                with open(json_path, 'w', encoding='utf-8') as j:
+                    json.dump({"content": m_list}, j, indent=4, ensure_ascii=False)
+            
+            return m_list
+    except Exception as e:
+        print(f"获取 male_only_taglist 时发生错误: {e}")
 
 class EHentaiTools:
     def __init__(self, cookie, logger=None):

@@ -174,7 +174,8 @@ class MetadataExtractor:
                     tag_name = self.translator.get_translation(tag_name, namespace)
                     tag_list.append(tag_name)
                 elif namespace == 'male':
-                    if tag_name in ehentai.male_only_taglist():
+                    m_list = ehentai.male_only_taglist()
+                    if m_list and tag_name in m_list:
                         tag_name = self.translator.get_translation(tag_name, namespace)
                         tag_list.append(tag_name)
                 elif namespace == 'other' or namespace == 'tag':
