@@ -16,6 +16,7 @@ class TaskDatabase:
     def __init__(self, db_path: str = './data/tasks.db'):
         self.db_path = db_path
         self.lock = threading.Lock()
+        self._latest_added_cache = None  # 缓存最新的收藏时间
         self._init_database()
 
     def _get_conn(self):
@@ -69,11 +70,25 @@ class TaskDatabase:
                     gid INTEGER PRIMARY KEY,
                     token TEXT NOT NULL,
                     title TEXT,
+                    originaltitle TEXT,
                     favcat INTEGER,
                     downloaded BOOLEAN DEFAULT 0,
-                    komga TEXT
+                    komga TEXT,
+                    added TEXT
                 )
             ''')
+
+            # 检查 eh_favorites 表的字段
+            cursor = conn.execute("PRAGMA table_info(eh_favorites)")
+            columns = [row[1] for row in cursor.fetchall()]
+
+            # 如果表已存在但缺少新字段，添加它们
+            if 'added' not in columns:
+                conn.execute('ALTER TABLE eh_favorites ADD COLUMN added TEXT')
+            if 'originaltitle' not in columns:
+                conn.execute('ALTER TABLE eh_favorites ADD COLUMN originaltitle TEXT')
+
+            conn.commit()
 
     def add_task(self, task_id: str, status: str = TaskStatus.IN_PROGRESS,
                  filename: Optional[str] = None, error: Optional[str] = None,
@@ -278,8 +293,51 @@ class TaskDatabase:
                 print(f"Database error getting global state: {e}")
                 return None
 
+    def upsert_eh_favorites(self, favorites: List[Dict]) -> bool:
+        """将 E-Hentai 收藏夹数据添加或更新到数据库 (UPSERT)"""
+        with self.lock:
+            favorites_to_upsert = []
+            for fav in favorites:
+                gid, token = parse_gallery_url(fav.get('url', ''))
+                if gid and token:
+                    favorites_to_upsert.append({
+                        'gid': gid,
+                        'token': token,
+                        'originaltitle': fav.get('title'),
+                        'favcat': fav.get('favcat'),
+                        'added': fav.get('added')
+                    })
+
+            if not favorites_to_upsert:
+                return True
+
+            try:
+                with self._get_conn() as conn:
+                    conn.executemany('''
+                        INSERT INTO eh_favorites (gid, token, originaltitle, favcat, added)
+                        VALUES (:gid, :token, :originaltitle, :favcat, :added)
+                        ON CONFLICT(gid) DO UPDATE SET
+                            token = excluded.token,
+                            originaltitle = excluded.originaltitle,
+                            favcat = excluded.favcat,
+                            added = excluded.added
+                    ''', favorites_to_upsert)
+                    conn.commit()
+                
+                # 更新缓存：找出最新的 added 时间
+                added_times = [f['added'] for f in favorites_to_upsert if f.get('added')]
+                if added_times:
+                    latest = max(added_times)
+                    if self._latest_added_cache is None or latest > self._latest_added_cache:
+                        self._latest_added_cache = latest
+                
+                return True
+            except sqlite3.Error as e:
+                print(f"Database error upserting EH favorites: {e}")
+                return False
+
     def add_eh_favorites(self, favorites: List[Dict]) -> bool:
-        """将 E-Hentai 收藏夹数据添加到数据库"""
+        """添加 E-Hentai 收藏夹数据到数据库（不更新已存在的记录）"""
         with self.lock:
             favorites_to_add = []
             for fav in favorites:
@@ -289,7 +347,8 @@ class TaskDatabase:
                         'gid': gid,
                         'token': token,
                         'title': fav.get('title'),
-                        'favcat': fav.get('favcat'),
+                        'originaltitle': fav.get('originaltitle'),
+                        'favcat': fav.get('favcat')
                     })
 
             if not favorites_to_add:
@@ -298,8 +357,8 @@ class TaskDatabase:
             try:
                 with self._get_conn() as conn:
                     conn.executemany('''
-                        INSERT OR IGNORE INTO eh_favorites (gid, token, title, favcat)
-                        VALUES (:gid, :token, :title, :favcat)
+                        INSERT OR IGNORE INTO eh_favorites (gid, token, title, originaltitle, favcat)
+                        VALUES (:gid, :token, :title, :originaltitle, :favcat)
                     ''', favorites_to_add)
                     conn.commit()
                 return True
@@ -374,12 +433,12 @@ class TaskDatabase:
                 print(f"Database error marking favorite as downloaded: {e}")
                 return False
 
-    def update_favorite_komga_id(self, gid: int, komga_id: str) -> bool:
-        """将指定 GID 的收藏夹项目的 Komga ID 记录下来，并标记为已下载"""
+    def update_favorite_komga_id(self, gid: int, komga_id: str, komga_title: str) -> bool:
+        """将指定 GID 的收藏夹项目的 Komga ID 记录下来，并标记为已下载，同时将 Komga 中的标题写入 title 字段"""
         with self.lock:
             try:
                 with self._get_conn() as conn:
-                    cursor = conn.execute('UPDATE eh_favorites SET komga = ?, downloaded = ? WHERE gid = ?', (komga_id, True, gid))
+                    cursor = conn.execute('UPDATE eh_favorites SET komga = ?, downloaded = ?, title = ? WHERE gid = ?', (komga_id, True, komga_title, gid))
                     conn.commit()
                     return cursor.rowcount > 0
             except sqlite3.Error as e:
@@ -421,6 +480,24 @@ class TaskDatabase:
                     return dict(row) if row else None
             except sqlite3.Error as e:
                 print(f"Database error getting favorite by Komga ID: {e}")
+                return None
+
+    def get_latest_added_time(self) -> Optional[str]:
+        """获取最新的收藏时间（带缓存）"""
+        # 如果缓存存在，直接返回
+        if self._latest_added_cache is not None:
+            return self._latest_added_cache
+        
+        # 缓存为空时查询数据库
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    cursor = conn.execute('SELECT MAX(added) FROM eh_favorites')
+                    row = cursor.fetchone()
+                    self._latest_added_cache = row[0] if row and row[0] else None
+                    return self._latest_added_cache
+            except sqlite3.Error as e:
+                print(f"Database error getting latest added time: {e}")
                 return None
 
 # 全局数据库实例

@@ -210,6 +210,15 @@ def check_config():
     # E-Hentai 收藏夹同步设置 (扁平化结构)
     app.config['EH_FAV_SYNC_ENABLED'] = ehentai_config.get('favorite_sync', False)
     app.config['EH_FAV_SYNC_INTERVAL'] = int(ehentai_config.get('interval_hours', 24))
+    app.config['EH_FAV_AUTO_DOWNLOAD'] = ehentai_config.get('auto_download_favorites', False)
+    
+    # 首次扫描页数：0 表示全量扫描，其他数字表示扫描指定页数
+    try:
+        initial_scan_pages = int(ehentai_config.get('initial_scan_pages', 1))
+        app.config['EH_FAV_INITIAL_SCAN_PAGES'] = max(0, initial_scan_pages)  # 确保非负数
+    except (ValueError, TypeError):
+        app.config['EH_FAV_INITIAL_SCAN_PAGES'] = 1
+        logging.warning("Invalid 'ehentai.initial_scan_pages'. Falling back to default 1 page.")
     
     # listen_categories 支持 "" (所有), 或 "0,1,2" (特定)
     favcat_setting = ehentai_config.get('listen_categories', '')
@@ -235,6 +244,10 @@ def check_config():
     eh = app.config['EH_TOOLS']
     nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)
     eh_valid, exh_valid, eh_funds = eh.is_valid_cookie()
+    if eh_valid or exh_valid:
+        # 预热收藏夹列表缓存
+        global_logger.info("正在预获取 E-Hentai 收藏夹列表...")
+        eh.get_favcat_list()
     hath_toggle = (eh_valid, exh_valid)
     update_eh_funds(eh_funds)
     nh_toggle = nh.is_valid_cookie()
@@ -442,7 +455,7 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
         check_task_cancelled(task_id)
 
         if not dl:
-            return None
+            return None, None
 
         # 创建 ComicInfo.xml 并转换为 CBZ
         if metadata.get('Writer') or metadata.get('Tags'):
@@ -499,6 +512,18 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
             template_vars['author'] = metadata.get('Penciller') or metadata.get('Writer') or None
             template_vars['series'] = metadata.get('Series') or None
 
+            # 如果标签中包含 anthology，则将作者/画师数量限制调整为2
+            tags = metadata.get('Tags', '').lower()
+            limit = 2 if 'anthology' in [tag.strip() for tag in tags.split(',')] else 3
+
+            # 为路径渲染限制作者/画师数量，避免路径过长
+            for key in ('penciller', 'writer'):
+                value = template_vars.get(key)
+                if value and isinstance(value, str) and len([item for item in value.split(',') if item.strip()]) >= limit:
+                    template_vars[key] = 'anthology'
+
+            # 基于可能已修改的 penciller 和 writer 更新 author
+            template_vars['author'] = template_vars.get('penciller') or template_vars.get('writer') or None
 
             move_path_template = app.config.get('MOVE_PATH')
             if move_path_template:
@@ -541,7 +566,7 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
                 (logger.info if logger else print)(f"文件移动到指定目录: {move_file_path}")
                 dl = move_file_path
             else:
-                return None
+                return None, None
 
         # 检查是否被取消
         check_task_cancelled(task_id)
@@ -553,7 +578,7 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
                 if app.config['KOMGA_LIBRARY_ID']:
                     kmg.scan_library(app.config['KOMGA_LIBRARY_ID'])
 
-        return dl
+        return dl, comicinfo_metadata
 
     except Exception as e:
         if logger: logger.error(f"Post-download processing failed: {e}")
@@ -649,7 +674,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     metadata['Web'] = url
     
     # 统一后处理
-    final_path = post_download_processing(dl, metadata, task_id, logger, is_nhentai=is_nhentai)
+    final_path, comicinfo_metadata = post_download_processing(dl, metadata, task_id, logger, is_nhentai=is_nhentai)
     
     # 验证处理结果
     if final_path and is_valid_zip(final_path):
@@ -693,12 +718,12 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
                     if token:
                         if gallery_tool.add_to_favorites(gid=gid, token=token, favcat=favcat):
                             # 添加到线上成功后，同步到本地数据库并标记为已下载
-                            # 使用 metadata_extractor 来生成标准化的标题
-                            raw_title = gmetadata.get('title_jpn') or gmetadata.get('title')
-                            clean_title, _, _ = parse_filename(raw_title, eh_translator)
+                            # title 存储从 ComicInfo 提取的标题（Komga 标题）
+                            title = comicinfo_metadata.get('Title') if comicinfo_metadata else None
+                            
                             fav_data = [{
                                 'url': f"https://exhentai.org/g/{gid}/{token}/",
-                                'title': clean_title,
+                                'title': title,
                                 'favcat': favcat
                             }]
                             task_db.add_eh_favorites(fav_data)
@@ -772,6 +797,7 @@ def download_url():
 
     if not url:
         return json_response({'error': 'No URL provided'}), 400
+    
     # 两位年份+月日时分秒，使用UTC时间避免时区问题
     task_id = datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')
     logger, log_buffer = get_task_logger(task_id)
@@ -1167,9 +1193,12 @@ def handle_favorite_downloaded(data):
         else:
             return json_response({'message': 'Favorite not found or already marked as downloaded.'}), 404
 
-    success = task_db.update_favorite_komga_id(gid, komga_book_id)
+    # 从 Komga metadata 中获取标题
+    komga_title = data.get('metadata', {}).get('title', '')
+    
+    success = task_db.update_favorite_komga_id(gid, komga_book_id, komga_title)
     if success:
-        global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已同步到 Komga (Book ID: {komga_book_id})。")
+        global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已同步到 Komga (Book ID: {komga_book_id}, Title: {komga_title})。")
         return json_response({'message': f'Favorite (gid: {gid}) marked as synced with Komga book ID {komga_book_id}.'}), 200
     else:
         return json_response({'message': 'Favorite not found or failed to mark as synced.'}), 404
@@ -1203,20 +1232,76 @@ def handle_favorite_deleted(data):
         global_logger.error(f"从线上收藏夹删除 gid: {gid} 失败。")
         return json_response({'error': f'Failed to delete favorite (gid: {gid}) from online favorites.'}), 500
 
-@app.route('/api/ehentai/favcats', methods=['GET'])
+@app.route('/api/ehentai/favorites/categories', methods=['GET'])
 def get_ehentai_favcats():
-    """获取 E-Hentai 收藏夹列表"""
+    """获取 E-Hentai 收藏夹分类列表"""
     if 'EH_TOOLS' in app.config:
         eh_tools = app.config['EH_TOOLS']
         favcat_list = eh_tools.get_favcat_list()
         
-        # 确保至少在同步任务运行一次后才有数据
         if not favcat_list and app.config.get('EH_FAV_SYNC_ENABLED'):
              return json_response({'message': '正在获取收藏夹列表, 请刷新页面重试。'}), 202
 
         return json_response(favcat_list)
     else:
         return json_response({'error': 'E-Hentai tools not initialized'}), 500
+
+@app.route('/api/ehentai/favorites/sync', methods=['GET'])
+def trigger_sync_favorites():
+    """
+    从线上同步 E-Hentai 收藏夹到本地数据库
+    参数: download=true/false (可选，是否同步后自动下载)
+    """
+    try:
+        if not app.config.get('EH_FAV_SYNC_ENABLED'):
+            return json_response({'error': 'E-Hentai 收藏夹同步功能未启用'}), 400
+        
+        # 获取 download 参数
+        download_param = request.args.get('download', '').lower()
+        if download_param in ('true', 't', '1', 'y', 'yes'):
+            auto_download = True
+        elif download_param in ('false', 'f', '0', 'n', 'no'):
+            auto_download = False
+        else:
+            # 未指定则使用 None，让 sync_eh_favorites_job 使用配置值
+            auto_download = None
+        
+        from scheduler import sync_eh_favorites_job
+        executor.submit(sync_eh_favorites_job, auto_download)
+        
+        download_status = auto_download if auto_download is not None else app.config.get('EH_FAV_AUTO_DOWNLOAD', False)
+        global_logger.info(f"手动触发 E-Hentai 收藏夹同步任务 (自动下载: {download_status})")
+        return json_response({
+            'message': 'E-Hentai 收藏夹同步任务已启动',
+            'auto_download': download_status
+        }), 202
+            
+    except Exception as e:
+        global_logger.error(f"触发 E-Hentai 收藏夹同步任务失败: {e}")
+        return json_response({'error': f'触发同步任务失败: {str(e)}'}), 500
+
+@app.route('/api/ehentai/favorites/fetch', methods=['GET'])
+def fetch_undownloaded_favorites():
+    """下载本地数据库中所有未下载的收藏"""
+    try:
+        from scheduler import trigger_undownloaded_favorites_download
+        
+        global_logger.info("手动触发未下载收藏的下载任务")
+        success_count, failed_count, total_count = trigger_undownloaded_favorites_download(logger=global_logger)
+        
+        if total_count == 0:
+            return json_response({'message': '没有需要下载的收藏项目'}), 200
+        
+        return json_response({
+            'message': f'已触发 {success_count} 个下载任务',
+            'success': success_count,
+            'failed': failed_count,
+            'total': total_count
+        }), 202
+        
+    except Exception as e:
+        global_logger.error(f"触发未下载收藏下载任务失败: {e}")
+        return json_response({'error': f'触发下载任务失败: {str(e)}'}), 500
 
 # Catch-all 路由，用于服务 Vue.js 的 index.html
 # 确保这个路由在所有 API 路由之后定义

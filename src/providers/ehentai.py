@@ -1,6 +1,7 @@
 import re, os, json, time
 import requests
 from bs4 import BeautifulSoup
+from datetime import datetime
 
 from utils import check_dirs
 
@@ -65,6 +66,36 @@ class EHentaiTools:
         self.session.headers.update(headers)
         self.session.cookies.update(cookie)
         self.favcat_map = {}
+    
+    def _normalize_time(self, time_str: str) -> str:
+        """
+        标准化时间字符串为ISO 8601格式，便于可靠比较
+        如果无法解析，返回原字符串并记录警告
+        """
+        if not time_str or not isinstance(time_str, str):
+            return ""
+        
+        time_str = time_str.strip()
+        
+        # 已经是标准格式，直接返回
+        if re.match(r'^\d{4}-\d{2}-\d{2}( \d{2}:\d{2})?$', time_str):
+            return time_str
+        
+        # 尝试解析其他可能的格式
+        try:
+            # 尝试常见格式
+            for fmt in ["%Y-%m-%d %H:%M", "%Y-%m-%d", "%d %b %Y", "%b %d, %Y"]:
+                try:
+                    dt = datetime.strptime(time_str, fmt)
+                    return dt.strftime("%Y-%m-%d %H:%M")
+                except ValueError:
+                    continue
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"无法标准化时间字符串 '{time_str}': {e}")
+        
+        # 无法解析，返回原字符串
+        return time_str
 
     def _check_url(self, url, name, error_msg, success_msg, keyword=None):
         try:
@@ -428,8 +459,10 @@ class EHentaiTools:
                 if 'cs' in div.get('class', []):
                     info['category'] = div.get_text(strip=True)
                 elif div.get('id', '').startswith('posted_'):
-                    info['posted_date'] = div.get_text(strip=True)
+                    time_text = div.get_text(strip=True)
+                    info['posted_date'] = time_text
                     info['favcat_title'] = div.get('title', '')
+                    info['added'] = self._normalize_time(time_text)
                 elif 'pages' in div.get_text(strip=True):
                     info['pages'] = div.get_text(strip=True)
             tags = gallery.select('div.gl6t > div.gt')
@@ -457,8 +490,10 @@ class EHentaiTools:
                 info['category'] = category_element.get_text(strip=True)
             posted_element = row.select_one('td.gl2m > div[id^="posted_"]')
             if posted_element:
-                info['posted_date'] = posted_element.get_text(strip=True)
+                time_text = posted_element.get_text(strip=True)
+                info['posted_date'] = time_text
                 info['favcat_title'] = posted_element.get('title', '')
+                info['added'] = self._normalize_time(time_text)
             tags = row.select('div.gltm > div.gt')
             info['tags'] = [tag.get('title', '') for tag in tags]
             if info:
@@ -484,8 +519,10 @@ class EHentaiTools:
                 info['category'] = category_element.get_text(strip=True)
             posted_element = row.select_one('td.gl2c > div > div[id^="posted_"]')
             if posted_element:
-                info['posted_date'] = posted_element.get_text(strip=True)
+                time_text = posted_element.get_text(strip=True)
+                info['posted_date'] = time_text
                 info['favcat_title'] = posted_element.get('title', '')
+                info['added'] = self._normalize_time(time_text)
             tags = row.select('td.gl3c.glname div.gt')
             info['tags'] = [tag.get('title', '') for tag in tags]
             authors = [tag.text for tag in tags if tag.get('title', '').startswith('artist:')]
@@ -514,8 +551,10 @@ class EHentaiTools:
                 info['category'] = category_element.get_text(strip=True)
             posted_element = row.select_one('div[id^="posted_"]')
             if posted_element:
-                info['posted_date'] = posted_element.get_text(strip=True)
+                time_text = posted_element.get_text(strip=True)
+                info['posted_date'] = time_text
                 info['favcat_title'] = posted_element.get('title', '')
+                info['added'] = self._normalize_time(time_text)
             tags = row.select('div.gl4e table div[title]')
             info['tags'] = [tag.get('title', '') for tag in tags]
             authors = [tag.text for tag in tags if tag.get('title', '').startswith('artist:')]
@@ -525,7 +564,7 @@ class EHentaiTools:
                 galleries.append(info)
         return galleries
 
-    def _parse_favorites_page(self, soup: BeautifulSoup, favcat: str) -> tuple[str, list]:
+    def _parse_favorites_page(self, soup: BeautifulSoup) -> tuple[str, list]:
         layout = self._get_layout(soup)
         self._build_favcat_map(soup)  # 更新收藏夹列表缓存
         galleries_data = []
@@ -538,9 +577,19 @@ class EHentaiTools:
         elif layout == 'extended':
             galleries_data = self._extract_extended_galleries(soup)
 
+        # 从页面中提取每个画廊的 favcat
+        # 创建收藏夹名称到ID的反向映射
+        name_to_id = {name: fav_id for fav_id, name in self.favcat_map.items()}
+        
         if galleries_data:
             for gallery in galleries_data:
-                gallery['favcat'] = favcat # 直接使用传入的 favcat ID
+                # favcat_title 存储的是收藏夹名称，如 "Common", "💕" 等
+                # 通过名称反查 favcat ID
+                favcat_name = gallery.get('favcat_title', '')
+                if favcat_name and favcat_name in name_to_id:
+                    gallery['favcat'] = name_to_id[favcat_name]
+                else:
+                    gallery['favcat'] = None
         return layout, galleries_data
 
     def get_favcat_list(self) -> list:
@@ -575,15 +624,62 @@ class EHentaiTools:
             favcat_list.sort(key=lambda x: int(x['id']))
         return favcat_list
 
-    def get_favorites(self, favcat_list: list) -> list:
+    def get_favorites(self, favcat_list: list, existing_gids: set = None, initial_scan_pages: int = 1) -> list:
+        """
+        获取收藏夹画廊列表
+        
+        Args:
+            favcat_list: 要同步的收藏夹分类ID列表
+            existing_gids: 数据库中已存在的GID集合，用于增量扫描
+            initial_scan_pages: 首次扫描页数，0表示全量扫描，其他数字表示扫描指定页数
+            
+        Returns:
+            画廊列表
+        """
         all_galleries = []
-        for favcat in favcat_list:
-            page_num = 0
-            while True:
-                url = f"https://exhentai.org/favorites.php?favcat={favcat}&page={page_num}"
+        stop_scanning = False
+        consecutive_matches = 0  # 连续匹配计数器
+        MATCH_THRESHOLD = 5  # 固定连续匹配阈值
+        
+        # 判断扫描模式
+        if existing_gids is None or len(existing_gids) == 0:
+            if initial_scan_pages == 0:
+                scan_mode = "full_scan"
+                max_pages = None  # 无限制
                 if self.logger:
-                    self.logger.info(f"正在获取收藏夹: favcat={favcat}, page={page_num}")
-                
+                    self.logger.info("数据库为空，将进行全量扫描（所有页）")
+            else:
+                scan_mode = "initial_scan"
+                max_pages = initial_scan_pages
+                if self.logger:
+                    self.logger.info(f"数据库为空，将扫描前 {initial_scan_pages} 页")
+        elif len(existing_gids) < MATCH_THRESHOLD:
+            if initial_scan_pages == 0:
+                scan_mode = "full_scan"
+                max_pages = None
+                if self.logger:
+                    self.logger.info(f"数据库中只有 {len(existing_gids)} 个记录（少于{MATCH_THRESHOLD}个），将进行全量扫描")
+            else:
+                scan_mode = "initial_scan"
+                max_pages = initial_scan_pages
+                if self.logger:
+                    self.logger.info(f"数据库中只有 {len(existing_gids)} 个记录（少于{MATCH_THRESHOLD}个），将扫描前 {initial_scan_pages} 页")
+        else:
+            scan_mode = "incremental"
+            max_pages = None  # 增量扫描不限制页数，由匹配阈值控制
+            if self.logger:
+                self.logger.info(f"数据库中有 {len(existing_gids)} 个记录，将进行增量扫描（连续匹配{MATCH_THRESHOLD}个时停止）")
+        
+        # 从收藏夹首页开始, 强制按收藏时间排序
+        url = "https://exhentai.org/favorites.php?inline_set=fs_f"
+        page_count = 0
+
+        while url and not stop_scanning:
+            page_count += 1
+            if self.logger:
+                self.logger.info(f"正在获取收藏夹页面 {page_count}: {url}")
+            
+            try:
                 response = self.session.get(url, allow_redirects=True, timeout=10)
                 if response.status_code != 200:
                     if self.logger:
@@ -591,21 +687,63 @@ class EHentaiTools:
                     break
                 
                 soup = BeautifulSoup(response.text, 'html.parser')
-                _, galleries_data = self._parse_favorites_page(soup, favcat)
+                # 从页面中提取画廊信息
+                _, galleries_data = self._parse_favorites_page(soup)
                 
                 if galleries_data:
-                    all_galleries.extend(galleries_data)
+                    for gallery in galleries_data:
+                        # 检查画廊是否属于指定的 favcat
+                        if gallery.get('favcat') not in favcat_list:
+                            continue
+                        
+                        # 提取 GID
+                        from utils import parse_gallery_url
+                        gid, _ = parse_gallery_url(gallery.get('url', ''))
+                        
+                        if scan_mode == "incremental" and existing_gids and gid:
+                            # 增量扫描模式
+                            if gid in existing_gids:
+                                consecutive_matches += 1
+                                if self.logger:
+                                    self.logger.info(f"发现已存在的 GID {gid}，连续匹配计数: {consecutive_matches}/{MATCH_THRESHOLD}")
+                                
+                                # 达到阈值，停止扫描
+                                if consecutive_matches >= MATCH_THRESHOLD:
+                                    stop_scanning = True
+                                    if self.logger:
+                                        self.logger.info(f"连续匹配 {MATCH_THRESHOLD} 个已存在的 GID，停止增量扫描。")
+                                    break
+                            else:
+                                # 遇到新画廊，重置计数器并添加
+                                consecutive_matches = 0
+                                all_galleries.append(gallery)
+                        else:
+                            # first_page 模式，直接添加
+                            all_galleries.append(gallery)
                 
-                # 检查是否有下一页
-                # 通过查找指向下一页的 '>' 按钮来判断
-                next_button = soup.select_one('a[onclick="return false"]')
-                if not next_button or next_button.text != '>':
+                if stop_scanning:
                     break
                 
-                page_num += 1
-                # 增加延迟，避免请求过于频繁
-                time.sleep(1)
-                
+                # initial_scan 模式：检查是否达到页数限制
+                if scan_mode == "initial_scan" and max_pages is not None:
+                    if page_count >= max_pages:
+                        if self.logger:
+                            self.logger.info(f"已扫描 {page_count} 页，达到配置的页数限制，停止扫描。")
+                        break
+
+                # 查找下一页链接
+                next_link = soup.select_one('div.searchnav a#dnext')
+                if next_link and next_link.get('href'):
+                    url = next_link['href']
+                    time.sleep(10) # 避免请求过于频繁
+                else:
+                    url = None # 没有下一页了
+
+            except requests.RequestException as e:
+                if self.logger:
+                    self.logger.error(f"获取收藏夹页面时发生网络错误: {url}, error: {e}")
+                break
+        
         return all_galleries
 
     def add_to_favorites(self, gid: int, token: str, favcat: str = '1', note: str = '') -> bool:

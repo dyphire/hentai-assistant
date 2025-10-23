@@ -2,7 +2,7 @@ from flask_apscheduler import APScheduler
 import logging
 import requests
 from flask import current_app
-from datetime import datetime
+from datetime import datetime, timezone
 from providers.ehentai import EHentaiTools
 from providers.komga import KomgaAPI
 from database import task_db
@@ -10,15 +10,74 @@ from database import task_db
 import html
 from utils import parse_gallery_url
 from metadata_extractor import parse_filename
-from providers.ehtranslator import EhTagTranslator
 
 # 初始化调度器
 scheduler = APScheduler()
 
-def sync_eh_favorites_job():
+def trigger_undownloaded_favorites_download(logger=None, config=None):
+    """
+    触发未下载收藏的下载任务。
+    可被 scheduler 自动调用，也可被 API 手动调用。
+    返回 (success_count, failed_count, total_count)
+    """
+    from flask import current_app
+    
+    if logger is None:
+        logger = current_app.logger
+    
+    if config is None:
+        config = current_app.config
+    
+    # 检查 cookie 是否有效
+    ehentai_tool = EHentaiTools(cookie=config.get('EH_COOKIE'), logger=logger)
+    eh_valid, exh_valid, _ = ehentai_tool.is_valid_cookie()
+    if not (eh_valid or exh_valid):
+        logger.warning("E-Hentai/ExHentai cookie 无效，无法触发下载任务。")
+        return 0, 0, 0
+    
+    undownloaded_favorites = task_db.get_undownloaded_favorites()
+    if not undownloaded_favorites:
+        logger.info("没有需要下载的新收藏夹项目。")
+        return 0, 0, 0
+    
+    logger.info(f"发现 {len(undownloaded_favorites)} 个新的收藏夹项目需要下载。")
+    port = config.get('PORT', 5001)
+    api_base_url = f"http://127.0.0.1:{port}"
+    
+    success_count = 0
+    failed_count = 0
+    
+    for fav in undownloaded_favorites:
+        gid = fav['gid']
+        token = fav['token']
+        # 动态构建 URL (优先使用 ExHentai)
+        domain = "exhentai.org" if exh_valid else "e-hentai.org"
+        url = f"https://{domain}/g/{gid}/{token}/"
+        
+        try:
+            logger.info(f"为新画廊创建下载任务: {url}")
+            favcat_id = fav.get('favcat')
+            response = requests.get(f"{api_base_url}/api/download", params={"url": url, "fav": favcat_id, "download": "true"}, timeout=10)
+            
+            if response.status_code == 202:
+                logger.info(f"成功为 {url} 创建下载任务。")
+                success_count += 1
+            else:
+                logger.error(f"为 {url} 创建下载任务失败: {response.status_code} - {response.text}")
+                failed_count += 1
+        except requests.RequestException as re:
+            logger.error(f"调用下载 API 时发生网络错误 for url {url}: {re}")
+            failed_count += 1
+    
+    return success_count, failed_count, len(undownloaded_favorites)
+
+def sync_eh_favorites_job(auto_download=None):
     """
     定时同步 E-Hentai 收藏夹的任务。
     该函数将由调度器定时调用。
+    
+    参数:
+    - auto_download: 是否自动下载（None 表示使用配置中的值）
     """
     # APScheduler 在后台线程运行，需要手动推入 app context
     with scheduler.app.app_context():
@@ -27,10 +86,11 @@ def sync_eh_favorites_job():
 
         try:
             config = current_app.config
-            ehentai_tool = EHentaiTools(cookie=config.get('EH_COOKIE'), logger=logger)
-            # 在同步任务中，我们需要一个临时的 translator 实例
-            eh_translator = EhTagTranslator(enable_translation=config.get('TAGS_TRANSLATION', True))
             
+            # 确定是否自动下载
+            if auto_download is None:
+                auto_download = config.get('EH_FAV_AUTO_DOWNLOAD', False)
+            ehentai_tool = EHentaiTools(cookie=config.get('EH_COOKIE'), logger=logger)
             # 1. 检查 cookie 是否有效
             eh_valid, exh_valid, _ = ehentai_tool.is_valid_cookie()
             if not (eh_valid or exh_valid):
@@ -45,73 +105,72 @@ def sync_eh_favorites_job():
 
             logger.info(f"准备同步以下收藏夹分类: {favcat_list}")
 
-            # 3. 获取所有画廊，并以 GID 作为键
-            online_galleries_raw = ehentai_tool.get_favorites(favcat_list)
+            # 3. 获取数据库中已存在的画廊
+            local_galleries_raw = task_db.get_eh_favorites_by_favcat(favcat_list)
+            local_galleries = {g['gid']: g for g in local_galleries_raw}
+            existing_gids = set(local_galleries.keys())
+            
+            # 获取首次扫描页数配置
+            initial_scan_pages = config.get('EH_FAV_INITIAL_SCAN_PAGES', 1)
+            
+            if existing_gids:
+                logger.info(f"数据库中已有 {len(existing_gids)} 个收藏画廊，将进行增量扫描（连续匹配5个相同GID时停止）。")
+            else:
+                if initial_scan_pages == 0:
+                    logger.info(f"数据库中没有收藏记录，将进行全量扫描（所有页）。")
+                else:
+                    logger.info(f"数据库中没有收藏记录，将扫描前 {initial_scan_pages} 页。")
+
+            # 4. 获取所有画廊，并以 GID 作为键（传入已存在的GID集合和首次扫描页数）
+            # 注意：当传入 existing_gids 时，get_favorites 会进行增量扫描，只返回新的画廊
+            is_incremental = existing_gids is not None and len(existing_gids) > 0
+            
+            online_galleries_raw = ehentai_tool.get_favorites(
+                favcat_list,
+                existing_gids=existing_gids if existing_gids else None,
+                initial_scan_pages=initial_scan_pages
+            )
             online_galleries = {}
             for g in online_galleries_raw:
                 gid, _ = parse_gallery_url(g.get('url', ''))
                 if gid:
                     online_galleries[gid] = g
-            logger.info(f"从线上收藏夹中获取到 {len(online_galleries)} 个有效画廊。")
-
-            # 4. 获取数据库中已存在的画廊
-            local_galleries_raw = task_db.get_eh_favorites_by_favcat(favcat_list)
-            local_galleries = {g['gid']: g for g in local_galleries_raw}
-            logger.info(f"从数据库中获取到 {len(local_galleries)} 个本地收藏画廊。")
-
-            # 5. 计算差异
-            online_gids = set(online_galleries.keys())
-            local_gids = set(local_galleries.keys())
             
-            new_gids = online_gids - local_gids
-            removed_gids = local_gids - online_gids
-            existing_gids = online_gids.intersection(local_gids)
-
-            # 6. 检查并更新已存在画廊的 favcat
-            updated_count = 0
-            if existing_gids:
-                for gid in existing_gids:
-                    online_favcat = online_galleries[gid].get('favcat')
-                    local_favcat = local_galleries[gid].get('favcat')
-                    if str(online_favcat) != str(local_favcat):
-                        if task_db.update_favorite_favcat(gid, online_favcat):
-                            logger.info(f"画廊 GID {gid} 的收藏夹分类已从 {local_favcat} 更新为 {online_favcat}。")
-                            updated_count += 1
-                        else:
-                            logger.error(f"更新 GID {gid} 的收藏夹分类失败。")
-            if updated_count > 0:
-                logger.info(f"成功更新了 {updated_count} 个画廊的收藏夹分类。")
+            if is_incremental:
+                logger.info(f"增量扫描完成，从线上收藏夹中获取到 {len(online_galleries)} 个新的画廊。")
             else:
-                logger.info("没有画廊的收藏夹分类需要更新。")
+                logger.info(f"全量扫描完成，从线上收藏夹中获取到 {len(online_galleries)} 个画廊。")
 
-            # 7. 执行数据库操作 (新增和删除)
-            if new_gids:
-                # 在添加到数据库之前，处理标题
-                galleries_with_parsed_titles = []
-                for gid in new_gids:
-                    gallery_data = online_galleries[gid]
-                    raw_title = gallery_data.get('title', '')
-                    # 使用 metadata_extractor 来生成标准化的标题
-                    clean_title, _, _ = parse_filename(html.unescape(raw_title), eh_translator)
-                    gallery_data['title'] = clean_title
-                    galleries_with_parsed_titles.append(gallery_data)
-
-                if task_db.add_eh_favorites(galleries_with_parsed_titles):
-                    logger.info(f"成功向数据库添加了 {len(new_gids)} 个新的收藏夹画廊。")
+            # 5. 执行数据库操作
+            # 使用 UPSERT 逻辑一次性处理新增和信息变更（如 favcat, added time）
+            if online_galleries:
+                galleries_to_upsert = list(online_galleries.values())
+                
+                if task_db.upsert_eh_favorites(galleries_to_upsert):
+                    logger.info(f"成功向数据库同步（新增/更新）了 {len(galleries_to_upsert)} 个收藏夹画廊。")
                 else:
-                    logger.error("向数据库添加新画廊时发生错误。")
+                    logger.error("向数据库同步（新增/更新）画廊时发生错误。")
             else:
-                logger.info("没有发现新的收藏夹画廊。")
+                logger.info("线上收藏夹为空或没有新画廊，无需同步。")
 
-            if removed_gids:
-                if task_db.delete_eh_favorites_by_gids(list(removed_gids)):
-                    logger.info(f"成功从数据库移除了 {len(removed_gids)} 个已不存在的收藏夹画廊。")
+            # 6. 只有在全量扫描时才删除本地不存在于线上的画廊
+            # 增量扫描时不删除，因为我们没有获取完整的线上列表
+            if not is_incremental:
+                online_gids = set(online_galleries.keys())
+                local_gids = set(local_galleries.keys())
+                removed_gids = local_gids - online_gids
+                
+                if removed_gids:
+                    if task_db.delete_eh_favorites_by_gids(list(removed_gids)):
+                        logger.info(f"成功从数据库移除了 {len(removed_gids)} 个已不存在的收藏夹画廊。")
+                    else:
+                        logger.error("从数据库移除旧画廊时发生错误。")
                 else:
-                    logger.error("从数据库移除旧画廊时发生错误。")
+                    logger.info("没有需要移除的收藏夹画廊。")
             else:
-                logger.info("没有需要移除的收藏夹画廊。")
+                logger.info("增量扫描模式，跳过画廊删除检查。")
 
-            # 8. 检查 Komga 匹配
+            # 7. 检查 Komga 匹配
             komga_enabled = config.get('KOMGA_TOGGLE', False)
             if komga_enabled:
                 logger.info("开始检查 Komga 中的收藏...")
@@ -127,23 +186,48 @@ def sync_eh_favorites_job():
                             logger.info(f"发现 {len(favorites_to_check)} 个项目需要在 Komga 中检查。")
                             match_count = 0
                             for fav in favorites_to_check:
-                                gid, token, title = fav['gid'], fav['token'], fav['title']
+                                gid, token = fav['gid'], fav['token']
+                                komga_title = fav.get('title')  # Komga 标题
+                                originaltitle = fav.get('originaltitle')  # 线上收藏夹原始标题
                                 expected_url_e = f"https://e-hentai.org/g/{gid}/{token}/"
                                 expected_url_ex = f"https://exhentai.org/g/{gid}/{token}/"
                                 
                                 try:
-                                    search_results = komga_api.search_book_by_title(title)
-                                    for book in search_results:
-                                        book_id = book.get('id')
-                                        links = book.get('metadata', {}).get('links', [])
-                                        found_match = any(link.get('url', '') in (expected_url_e, expected_url_ex) for link in links)
-                                        if found_match:
-                                            logger.info(f"在 Komga 中找到匹配项: '{title}' (GID: {gid}) -> Komga Book ID: {book_id}")
-                                            if task_db.update_favorite_komga_id(gid, book_id):
-                                                match_count += 1
-                                            break
+                                    found_match = False
+                                    matched_book_id = None
+                                    matched_book_title = None
+                                    
+                                    # 确定搜索标题
+                                    search_title = None
+                                    if komga_title:
+                                        # 优先使用 Komga 标题
+                                        search_title = komga_title
+                                    elif originaltitle:
+                                        # 如果没有 Komga 标题，使用 parse_filename 从原始标题中提取
+                                        parsed_title, _, _ = parse_filename(originaltitle, None)
+                                        search_title = parsed_title if parsed_title else None
+                                    
+                                    # 用标题搜索
+                                    if search_title:
+                                        search_results = komga_api.search_book_by_title(search_title)
+                                        logger.info(f"搜索标题 '{search_title}' (GID: {gid})，找到 {len(search_results)} 个结果")
+                                        for book in search_results:
+                                            book_id = book.get('id')
+                                            links = book.get('metadata', {}).get('links', [])
+                                            if any(link.get('url', '') in (expected_url_e, expected_url_ex) for link in links):
+                                                found_match = True
+                                                matched_book_id = book_id
+                                                matched_book_title = book.get('metadata', {}).get('title', '')
+                                                logger.info(f"在 Komga 中找到匹配项: '{search_title}' (GID: {gid}) -> Komga Book ID: {book_id}")
+                                                break
+                                    
+                                    # 如果找到匹配，更新数据库
+                                    if found_match and matched_book_id:
+                                        if task_db.update_favorite_komga_id(gid, matched_book_id, matched_book_title):
+                                            match_count += 1
+                                    
                                 except Exception as e:
-                                    logger.error(f"处理 GID {gid} ('{title}') 时发生错误: {e}", exc_info=True)
+                                    logger.error(f"处理 GID {gid} (search_title: '{search_title}') 时发生错误: {e}", exc_info=True)
                             if match_count > 0:
                                 logger.info(f"Komga 检查完成，成功匹配并更新了 {match_count} 个项目。")
                         else:
@@ -155,34 +239,11 @@ def sync_eh_favorites_job():
             else:
                 logger.info("Komga 集成未启用，跳过检查。")
 
-            # 9. 触发未下载收藏的下载任务
-            undownloaded_favorites = task_db.get_undownloaded_favorites()
-            if undownloaded_favorites:
-                logger.info(f"发现 {len(undownloaded_favorites)} 个新的收藏夹项目需要下载。")
-                port = config.get('PORT', 5001)
-                api_base_url = f"http://127.0.0.1:{port}"
-                
-                for fav in undownloaded_favorites:
-                    gid = fav['gid']
-                    token = fav['token']
-                    # 动态构建 URL (优先使用 ExHentai)
-                    domain = "exhentai.org" if exh_valid else "e-hentai.org"
-                    url = f"https://{domain}/g/{gid}/{token}/"
-                    
-                    try:
-                        logger.info(f"为新画廊创建下载任务: {url}")
-                        favcat_id = fav.get('favcat')
-                        response = requests.get(f"{api_base_url}/api/download", params={"url": url, "fav": favcat_id}, timeout=10)
-                        
-                        if response.status_code == 202:
-                            logger.info(f"成功为 {url} 创建下载任务。现在将其标记为已下载。")
-                            task_db.mark_favorite_as_downloaded(gid)
-                        else:
-                            logger.error(f"为 {url} 创建下载任务失败: {response.status_code} - {response.text}")
-                    except requests.RequestException as re:
-                        logger.error(f"调用下载 API 时发生网络错误 for url {url}: {re}")
+            # 8. 触发未下载收藏的下载任务（如果启用了自动下载）
+            if auto_download:
+                trigger_undownloaded_favorites_download(logger=logger, config=config)
             else:
-                logger.info("没有需要下载的新收藏夹项目。")
+                logger.info("自动下载收藏功能未启用，跳过下载任务创建。")
 
             logger.info("E-Hentai 收藏夹同步任务执行完毕。")
 

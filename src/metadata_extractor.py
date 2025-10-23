@@ -153,7 +153,6 @@ class MetadataExtractor:
     def parse_eh_tags(self, tags):
         comicinfo = {'AgeRating':'R18+'}
         tag_list = []
-        collectionlist = []
         for tag in tags:
             matchTag = re.match(r'(.+?):(.*)',tag)
             if matchTag:
@@ -190,7 +189,6 @@ class MetadataExtractor:
         if not 'webtoon' in tag_list_sorted:
             comicinfo['Manga'] = 'YesAndRightToLeft'
         comicinfo['Tags'] = ', '.join(tag_list_sorted)
-        if not collectionlist == []: comicinfo['SeriesGroup'] = ', '.join(collectionlist)
         return comicinfo
 
     def parse_gmetadata(self, data, logger=None):

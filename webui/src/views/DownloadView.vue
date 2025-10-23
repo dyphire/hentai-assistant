@@ -91,16 +91,15 @@ const dropdown = ref<HTMLElement | null>(null);
 const modeOptions = [
   { value: '', label: '自动选择' },
   { value: 'torrent', label: '种子下载' },
-  { value: 'archive', label: '归档下载' },
-  { value: 'both', label: '两者都尝试' }
+  { value: 'archive', label: '归档下载' }
 ];
 
 // 收藏夹分类下拉菜单
-const favcat = ref<string>(''); // -1 表示不添加到收藏夹
+const favcat = ref<string>('-1'); // -1 表示不添加到收藏夹
 const isFavcatDropdownOpen = ref(false);
 const favcatDropdown = ref<HTMLElement | null>(null);
 const favcatOptions = ref([
-  { value: '', label: '无' }
+  { value: '-1', label: '-' }
 ]);
 
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
@@ -113,14 +112,14 @@ const fetchFavcatOptions = async () => {
         value: fav.id,
         label: fav.name
       }));
-      // 将获取到的选项追加到“无”之后
-      favcatOptions.value = [{ value: '', label: '无' }, ...formattedOptions];
+      // 将获取到的选项追加到“-”之后
+      favcatOptions.value = [{ value: '-1', label: '-' }, ...formattedOptions];
     }
   } catch (error) {
     console.error('获取收藏夹列表失败:', error);
     // 即使失败，也提供一个默认的列表
     favcatOptions.value = [
-      { value: '', label: '无' },
+      { value: '-1', label: '-' },
       ...Array.from({ length: 10 }, (_, i) => ({ value: `${i}`, label: `Favorites ${i}` }))
     ];
   }
@@ -190,7 +189,7 @@ const submitDownload = async () => {
     };
     
     // 如果选择了收藏夹分类，则添加 fav 参数
-    if (favcat.value !== '') {
+    if (favcat.value !== '-1') {
       params.fav = favcat.value;
     }
     
@@ -233,13 +232,13 @@ const toggleFavcatDropdown = () => {
 
 const getSelectedFavcatLabel = () => {
   const selectedOption = favcatOptions.value.find(option => option.value === favcat.value);
-  return selectedOption ? selectedOption.label : '无';
+  return selectedOption ? selectedOption.label : '-';
 };
 
 const selectFavcatOption = (value: string) => {
   favcat.value = value;
   isFavcatDropdownOpen.value = false;
-  if (value) {
+  if (value !== '-1') {
     localStorage.setItem('downloadFavcat', value);
   } else {
     localStorage.removeItem('downloadFavcat');

@@ -31,8 +31,10 @@ def get_default_config():
         'ehentai': {
             'cookie': '',
             'favorite_sync': 'false',
-            'interval_hours': '6',
-            'listen_categories': ''
+            'interval': '6h',
+            'listen_categories': '',
+            'initial_scan_pages': '1',
+            'auto_download_favorites': 'false'
         },
         'nhentai': {
             'cookie': ''
@@ -199,12 +201,40 @@ def load_config():
 
     # --- Final Validation ---
     eh_config = converted_config.get('ehentai', {})
+    
+    # 解析 interval 配置，支持 m(分钟), h(小时), d(天) 后缀，默认为小时
+    interval_str = str(eh_config.get('interval', '6h')).strip().lower()
     try:
-        interval = float(eh_config.get('interval_hours'))
-        if interval <= 0:
-            raise ValueError("Interval must be positive")
-    except (ValueError, TypeError, AttributeError):
+        # 兼容旧的 interval_hours 配置
+        if 'interval_hours' in eh_config and 'interval' not in config_data.get('ehentai', {}):
+            interval_hours = float(eh_config.get('interval_hours'))
+            if interval_hours <= 0:
+                raise ValueError("Interval must be positive")
+            eh_config['interval_hours'] = interval_hours
+        else:
+            # 解析新的 interval 格式
+            if interval_str.endswith('m'):
+                # 分钟
+                value = float(interval_str[:-1])
+                interval_hours = value / 60
+            elif interval_str.endswith('h'):
+                # 小时
+                value = float(interval_str[:-1])
+                interval_hours = value
+            elif interval_str.endswith('d'):
+                # 天
+                value = float(interval_str[:-1])
+                interval_hours = value * 24
+            else:
+                # 没有单位，默认为小时
+                interval_hours = float(interval_str)
+            
+            if interval_hours <= 0:
+                raise ValueError("Interval must be positive")
+            
+            eh_config['interval_hours'] = interval_hours
+    except (ValueError, TypeError, AttributeError) as e:
         eh_config['interval_hours'] = 24
-        logging.warning("Invalid 'ehentai.interval_hours'. Falling back to default 24 hours.")
+        logging.warning(f"Invalid 'ehentai.interval' ('{interval_str}'). Falling back to default 24 hours. Error: {e}")
 
     return converted_config
