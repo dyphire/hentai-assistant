@@ -71,13 +71,45 @@ def male_only_taglist():
         print(f"获取 male_only_taglist 时发生错误: {e}")
 
 class EHentaiTools:
-    def __init__(self, cookie, logger=None):
-        self.cookie = cookie
+    def __init__(self, ipb_member_id=None, ipb_pass_hash=None, logger=None):
         self.logger = logger
         self.session = requests.Session()
         self.session.headers.update(headers)
-        self.session.cookies.update(cookie)
+        
+        # 临时cookie缓存（运行时自动获取）
+        self.cached_sk = None
+        self.cached_igneous = None
+        
+        # 设置基础认证cookie
+        if ipb_member_id and ipb_pass_hash:
+            for domain in ['.e-hentai.org', '.exhentai.org']:
+                self.session.cookies.set('ipb_member_id', ipb_member_id, domain=domain)
+                self.session.cookies.set('ipb_pass_hash', ipb_pass_hash, domain=domain)
+
+        
         self.favcat_map = {}
+    
+    def _update_cached_cookies(self):
+        """在每次请求成功后更新缓存的临时cookies"""
+        # 从session中提取最新的sk和igneous
+        for cookie in self.session.cookies:
+            if cookie.name == 'sk' and cookie.value:
+                if self.cached_sk != cookie.value:
+                    self.cached_sk = cookie.value
+                    if self.logger:
+                        self.logger.info(f"已更新缓存的 sk cookie")
+            elif cookie.name == 'igneous' and cookie.value:
+                if self.cached_igneous != cookie.value:
+                    self.cached_igneous = cookie.value
+                    if self.logger:
+                        self.logger.info(f"已更新缓存的 igneous cookie")
+    
+    def get_cached_cookies(self):
+        """获取缓存的临时cookies，用于保存到配置"""
+        return {
+            'sk': self.cached_sk,
+            'igneous': self.cached_igneous
+        }
     
     def _normalize_time(self, time_str: str) -> str:
         """
@@ -138,6 +170,11 @@ class EHentaiTools:
             "无法访问 https://e-hentai.org/exchange.php?t=gp, Archive 下载功能将不可用",
             "成功访问 https://e-hentai.org/exchange.php?t=gp, Archive 下载功能可用"
         )
+        
+        # 第一次访问e-hentai后更新cookies（获取sk）
+        if eh_valid:
+            self._update_cached_cookies()
+        
         # 再检查 ExHentai
         exh_valid, _ = self._check_url(
             "https://exhentai.org/uconfig.php",
@@ -146,6 +183,10 @@ class EHentaiTools:
             "成功访问 https://exhentai.org/uconfig.php, ExHentai 下载功能可用",
             keyword="uconfig"
         )
+        
+        # 访问exhentai后更新cookies（获取igneous）
+        if exh_valid:
+            self._update_cached_cookies()
 
         return eh_valid, exh_valid, eh_funds
 

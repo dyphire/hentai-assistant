@@ -205,8 +205,8 @@ def check_config():
 
     # E-Hentai 设置
     ehentai_config = config_data.get('ehentai', {})
-    cookie = ehentai_config.get('cookie', '')
-    app.config['EH_COOKIE'] = {"cookie": cookie} if cookie else {"cookie": ""}
+    app.config['EH_IPB_MEMBER_ID'] = ehentai_config.get('ipb_member_id', '')
+    app.config['EH_IPB_PASS_HASH'] = ehentai_config.get('ipb_pass_hash', '')
 
     # E-Hentai 收藏夹同步设置 (扁平化结构)
     app.config['EH_FAV_SYNC_ENABLED'] = ehentai_config.get('favorite_sync', False)
@@ -237,10 +237,18 @@ def check_config():
 
     # 初始化 E-Hentai 工具类并存储在 app.config 中
     if 'EH_TOOLS' not in app.config:
-        app.config['EH_TOOLS'] = ehentai.EHentaiTools(cookie=app.config['EH_COOKIE'], logger=global_logger)
+        app.config['EH_TOOLS'] = ehentai.EHentaiTools(
+            ipb_member_id=app.config['EH_IPB_MEMBER_ID'],
+            ipb_pass_hash=app.config['EH_IPB_PASS_HASH'],
+            logger=global_logger
+        )
     else:
-        # 如果已存在，则只更新 cookie
-        app.config['EH_TOOLS'].cookie = app.config['EH_COOKIE']
+        # 如果已存在，重新创建实例以应用新配置
+        app.config['EH_TOOLS'] = ehentai.EHentaiTools(
+            ipb_member_id=app.config['EH_IPB_MEMBER_ID'],
+            ipb_pass_hash=app.config['EH_IPB_PASS_HASH'],
+            logger=global_logger
+        )
     
     eh = app.config['EH_TOOLS']
     nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)

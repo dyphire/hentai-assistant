@@ -10,6 +10,70 @@ def lowercase_keys(obj):
         return [lowercase_keys(elem) for elem in obj]
     return obj
 
+def migrate_cookie_to_credentials():
+    """
+    检查 config.yaml 中的 ehentai.cookie 字段，如果存在完整cookie字符串，
+    则提取 ipb_member_id 和 ipb_pass_hash，写入配置并删除旧的 cookie 字段。
+    """
+    config_dir = 'data'
+    yaml_path = os.path.join(config_dir, 'config.yaml')
+    
+    if not os.path.exists(yaml_path):
+        return
+    
+    try:
+        # 读取 yaml 配置
+        with open(yaml_path, 'r', encoding='utf-8') as yaml_file:
+            config = yaml.safe_load(yaml_file) or {}
+        
+        ehentai = config.get('ehentai', {})
+        cookie_str = ehentai.get('cookie', '')
+        
+        # 如果没有 cookie 字段或已经有 ipb_member_id，则跳过
+        if not cookie_str or ehentai.get('ipb_member_id'):
+            return
+        
+        print(f"检测到旧的 E-Hentai cookie 格式，正在迁移...")
+        
+        # 从 cookie 字符串中提取 ipb_member_id 和 ipb_pass_hash
+        ipb_member_id = None
+        ipb_pass_hash = None
+        
+        for item in cookie_str.split(';'):
+            if '=' in item:
+                key, value = item.strip().split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if key == 'ipb_member_id':
+                    ipb_member_id = value
+                elif key == 'ipb_pass_hash':
+                    ipb_pass_hash = value
+        
+        # 如果成功提取到两个关键cookie，则更新配置
+        if ipb_member_id and ipb_pass_hash:
+            ehentai['ipb_member_id'] = ipb_member_id
+            ehentai['ipb_pass_hash'] = ipb_pass_hash
+            # 删除旧的 cookie 字段
+            if 'cookie' in ehentai:
+                del ehentai['cookie']
+            
+            config['ehentai'] = ehentai
+            
+            # 写回 yaml 文件
+            with open(yaml_path, 'w', encoding='utf-8') as yaml_file:
+                for i, (section, data) in enumerate(config.items()):
+                    if i > 0:
+                        yaml_file.write('\n')
+                    yaml.dump({section: data}, yaml_file, allow_unicode=True, sort_keys=False)
+            
+            print(f"E-Hentai cookie 迁移成功: ipb_member_id={ipb_member_id}")
+        else:
+            print("无法从 cookie 字符串中提取 ipb_member_id 和 ipb_pass_hash")
+    
+    except Exception as e:
+        print(f"迁移 E-Hentai cookie 时出错: {e}")
+
 def migrate_ini_to_yaml():
     """
     检查是否存在 config.ini 文件，如果存在，则将其配置合并到 config.yaml，
@@ -66,6 +130,9 @@ def migrate_ini_to_yaml():
 
         except Exception as e:
             print(f"Error migrating config file: {e}")
+    
+    # 在 ini 迁移后，检查并迁移 cookie 格式
+    migrate_cookie_to_credentials()
 
 if __name__ == '__main__':
     # 允许直接运行此脚本进行测试

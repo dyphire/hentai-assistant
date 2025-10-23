@@ -2,12 +2,9 @@ from flask_apscheduler import APScheduler
 import logging
 import requests
 from flask import current_app
-from datetime import datetime, timezone
-from providers.ehentai import EHentaiTools
 from providers.komga import KomgaAPI
 from database import task_db
 
-import html
 from utils import parse_gallery_url
 from metadata_extractor import parse_filename
 
@@ -28,8 +25,13 @@ def trigger_undownloaded_favorites_download(logger=None, config=None):
     if config is None:
         config = current_app.config
     
+    # 使用全局 EH_TOOLS 实例
+    ehentai_tool = config.get('EH_TOOLS')
+    if not ehentai_tool:
+        logger.warning("EH_TOOLS 未初始化，无法触发下载任务。")
+        return 0, 0, 0
+    
     # 检查 cookie 是否有效
-    ehentai_tool = EHentaiTools(cookie=config.get('EH_COOKIE'), logger=logger)
     eh_valid, exh_valid, _ = ehentai_tool.is_valid_cookie()
     if not (eh_valid or exh_valid):
         logger.warning("E-Hentai/ExHentai cookie 无效，无法触发下载任务。")
@@ -90,7 +92,12 @@ def sync_eh_favorites_job(auto_download=None):
             # 确定是否自动下载
             if auto_download is None:
                 auto_download = config.get('EH_FAV_AUTO_DOWNLOAD', False)
-            ehentai_tool = EHentaiTools(cookie=config.get('EH_COOKIE'), logger=logger)
+            # 使用全局 EH_TOOLS 实例
+            ehentai_tool = config.get('EH_TOOLS')
+            if not ehentai_tool:
+                logger.warning("EH_TOOLS 未初始化，跳过收藏夹同步。")
+                return
+            
             # 1. 检查 cookie 是否有效
             eh_valid, exh_valid, _ = ehentai_tool.is_valid_cookie()
             if not (eh_valid or exh_valid):
@@ -276,7 +283,7 @@ def update_scheduler_jobs(app):
                 misfire_grace_time=3600
             )
             if existing_job:
-                app.logger.info(f"E-Hentai 收藏夹同步任务已更新，将立即执行一次，然后按每 {sync_interval} 小时的间隔运行。")
+                app.logger.info(f"E-Hentai 收藏夹同步任务将以 {sync_interval} 小时的间隔运行。")
         else:
             # 如果功能被禁用，日志会告知用户任务已被移除（如果它之前存在）
             if existing_job:

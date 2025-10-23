@@ -29,7 +29,8 @@ def get_default_config():
             'openai_series_detection': 'false' # 启用后，使用配置号的 OpenAI 接口对标题进行系列名和序号的检测。
         },
         'ehentai': {
-            'cookie': '',
+            'ipb_member_id': '',
+            'ipb_pass_hash': '',
             'favorite_sync': 'false',
             'interval': '6h',
             'listen_categories': '',
