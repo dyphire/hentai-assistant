@@ -33,8 +33,8 @@ def get_default_config():
             'ipb_pass_hash': '',
             'favorite_sync': 'false',
             'interval': '6h',
-            'listen_categories': '',
-            'initial_scan_pages': '1',
+            'favcat_whitelist': [],
+            'initial_scan_pages': 1,
             'auto_download_favorites': 'false'
         },
         'nhentai': {
@@ -188,7 +188,14 @@ def load_config():
         
         converted_section = {}
         for key, value in section_items.items():
-            if isinstance(value, str):
+            # 跳过特定的数值字段，不进行布尔转换
+            if section == 'ehentai' and key == 'initial_scan_pages':
+                # 保持为整数
+                try:
+                    converted_section[key] = int(value)
+                except (ValueError, TypeError):
+                    converted_section[key] = 1  # 默认值
+            elif isinstance(value, str):
                 lower_value = value.lower()
                 if lower_value in TRUE_VALUES:
                     converted_section[key] = True
@@ -206,34 +213,27 @@ def load_config():
     # 解析 interval 配置，支持 m(分钟), h(小时), d(天) 后缀，默认为小时
     interval_str = str(eh_config.get('interval', '6h')).strip().lower()
     try:
-        # 兼容旧的 interval_hours 配置
-        if 'interval_hours' in eh_config and 'interval' not in config_data.get('ehentai', {}):
-            interval_hours = float(eh_config.get('interval_hours'))
-            if interval_hours <= 0:
-                raise ValueError("Interval must be positive")
-            eh_config['interval_hours'] = interval_hours
+        # 解析 interval 格式
+        if interval_str.endswith('m'):
+            # 分钟
+            value = float(interval_str[:-1])
+            interval_hours = value / 60
+        elif interval_str.endswith('h'):
+            # 小时
+            value = float(interval_str[:-1])
+            interval_hours = value
+        elif interval_str.endswith('d'):
+            # 天
+            value = float(interval_str[:-1])
+            interval_hours = value * 24
         else:
-            # 解析新的 interval 格式
-            if interval_str.endswith('m'):
-                # 分钟
-                value = float(interval_str[:-1])
-                interval_hours = value / 60
-            elif interval_str.endswith('h'):
-                # 小时
-                value = float(interval_str[:-1])
-                interval_hours = value
-            elif interval_str.endswith('d'):
-                # 天
-                value = float(interval_str[:-1])
-                interval_hours = value * 24
-            else:
-                # 没有单位，默认为小时
-                interval_hours = float(interval_str)
-            
-            if interval_hours <= 0:
-                raise ValueError("Interval must be positive")
-            
-            eh_config['interval_hours'] = interval_hours
+            # 没有单位，默认为小时
+            interval_hours = float(interval_str)
+        
+        if interval_hours <= 0:
+            raise ValueError("Interval must be positive")
+        
+        eh_config['interval_hours'] = interval_hours
     except (ValueError, TypeError, AttributeError) as e:
         eh_config['interval_hours'] = 24
         logging.warning(f"Invalid 'ehentai.interval' ('{interval_str}'). Falling back to default 24 hours. Error: {e}")

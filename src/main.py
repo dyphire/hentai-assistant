@@ -221,13 +221,13 @@ def check_config():
         app.config['EH_FAV_INITIAL_SCAN_PAGES'] = 1
         logging.warning("Invalid 'ehentai.initial_scan_pages'. Falling back to default 1 page.")
     
-    # listen_categories 支持 "" (所有), 或 "0,1,2" (特定)
-    favcat_setting = ehentai_config.get('listen_categories', '')
-    if favcat_setting == '':
-        app.config['EH_FAV_SYNC_FAVCAT'] = list(map(str, range(10)))  # "" 对应 0-9
+    # favcat_whitelist 支持空列表 (所有), 或 [0,1,2] (特定)
+    favcat_whitelist = ehentai_config.get('favcat_whitelist', [])
+    if not favcat_whitelist or favcat_whitelist == []:
+        app.config['EH_FAV_SYNC_FAVCAT'] = list(map(str, range(10)))  # 空列表对应 0-9
     else:
-        # 将 "0,1,2" 这样的字符串转换为 ["0", "1", "2"]
-        app.config['EH_FAV_SYNC_FAVCAT'] = [cat.strip() for cat in str(favcat_setting).split(',')]
+        # 将列表中的元素转换为字符串
+        app.config['EH_FAV_SYNC_FAVCAT'] = [str(cat).strip() for cat in favcat_whitelist]
     
 
     # nhentai 设置
@@ -674,6 +674,8 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
             # 对于被删除的画廊，尝试从 API 中找到有效的种子链接
             # 从 gmetadata.torrents 中找到日期最新的记录中的 hash 值
             torrent_path = gallery_tool.get_deleted_gallery_torrent(gmetadata)
+            if not torrent_path:
+                raise ValueError("无法获取下载链接：画廊可能已被删除且没有可用的种子")
             # 再将种子推送到 aria2, 种子将会下载到 dir
             dl = send_to_aria2(torrent=torrent_path, dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
     check_task_cancelled(task_id)

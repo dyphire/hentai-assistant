@@ -451,39 +451,39 @@ class EHentaiTools:
                                 return 'torrent', torrent_path
                             else:
                                 if self.logger: self.logger.warning("未找到任何有效种子。")
-                # 获取 Archive
-                if self.logger: self.logger.info('\n开始进行 Archive Download')
-                archive_a_tag = soup.find("a", string="Archive Download",onclick=True)
-                # 提取链接
-                if archive_a_tag:
-                    # 获取onclick属性中的URL
-                    onclick_value = archive_a_tag['onclick']
-                    # 提取URL
-                    start_idx = onclick_value.find("'") + 1
-                    end_idx = onclick_value.find("'", start_idx)
-                    download_url = onclick_value[start_idx:end_idx]
-                    if self.logger: self.logger.info(f"Archive Download Link: {download_url}")
-                else:
-                    if self.logger: self.logger.info("No matching element found.")
-                data = {
-                    "dltype":"org",
-                    "dlcheck":"Download Original Archive"
-                }
-                try:
-                    response = self.session.post(download_url, data)
-                    a_soup = BeautifulSoup(response.text, 'html.parser')
-                    # 查找所有带有 onclick 属性的 <a> 标签
-                    a_tags_with_onclick = a_soup.find_all('a', onclick=True)
-                    # 提取 href 属性内容
-                    hrefs = [a['href'] for a in a_tags_with_onclick]
-                    base_url = hrefs[0].replace("?autostart=1", "")
-                    final_url = base_url + '?start=1'
-                    if self.logger: self.logger.info(f"开始下载: {final_url}")
-                    # 返回种子地址
-                    return 'archive', final_url
-                except Exception as e:
-                    # 如果发生了特定类型的异常，执行这里的代码
-                    if self.logger: self.logger.info(f"An error occurred: {e}")
+            # 获取 Archive
+            if self.logger: self.logger.info('\n开始进行 Archive Download')
+            archive_a_tag = soup.find("a", string="Archive Download",onclick=True)
+            # 提取链接
+            if archive_a_tag:
+                # 获取onclick属性中的URL
+                onclick_value = archive_a_tag['onclick']
+                # 提取URL
+                start_idx = onclick_value.find("'") + 1
+                end_idx = onclick_value.find("'", start_idx)
+                download_url = onclick_value[start_idx:end_idx]
+                if self.logger: self.logger.info(f"Archive Download Link: {download_url}")
+            else:
+                if self.logger: self.logger.info("No matching element found.")
+            data = {
+                "dltype":"org",
+                "dlcheck":"Download Original Archive"
+            }
+            try:
+                response = self.session.post(download_url, data)
+                a_soup = BeautifulSoup(response.text, 'html.parser')
+                # 查找所有带有 onclick 属性的 <a> 标签
+                a_tags_with_onclick = a_soup.find_all('a', onclick=True)
+                # 提取 href 属性内容
+                hrefs = [a['href'] for a in a_tags_with_onclick]
+                base_url = hrefs[0].replace("?autostart=1", "")
+                final_url = base_url + '?start=1'
+                if self.logger: self.logger.info(f"开始下载: {final_url}")
+                # 返回种子地址
+                return 'archive', final_url
+            except Exception as e:
+                # 如果发生了特定类型的异常，执行这里的代码
+                if self.logger: self.logger.info(f"An error occurred: {e}")
 
     LAYOUT_SELECTORS = {
         "thumbnail": 'div[class^="itg gld"]',

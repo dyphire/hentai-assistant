@@ -7,7 +7,7 @@
         <div class="service-info">
           <span class="service-name">E-Hentai</span>
           <span class="service-details" v-if="status.eh_funds">
-            <span v-if="formattedGP">GP: {{ formattedGP }}</span>
+            <span v-if="formattedGP">GP: {{ formattedGP }}k</span>
             <span v-if="formattedCredits"> | Cr: {{ formattedCredits }}</span>
           </span>
         </div>

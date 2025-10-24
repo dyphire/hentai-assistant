@@ -74,6 +74,66 @@ def migrate_cookie_to_credentials():
     except Exception as e:
         print(f"迁移 E-Hentai cookie 时出错: {e}")
 
+def migrate_listen_categories_to_favcat_whitelist():
+    """
+    检查 config.yaml 中的 ehentai.listen_categories 字段，如果存在，
+    则将其从字符串格式迁移为 favcat_whitelist 列表格式。
+    """
+    config_dir = 'data'
+    yaml_path = os.path.join(config_dir, 'config.yaml')
+    
+    if not os.path.exists(yaml_path):
+        return
+    
+    try:
+        # 读取 yaml 配置
+        with open(yaml_path, 'r', encoding='utf-8') as yaml_file:
+            config = yaml.safe_load(yaml_file) or {}
+        
+        ehentai = config.get('ehentai', {})
+        
+        # 如果已经有 favcat_whitelist 或没有 listen_categories，则跳过
+        if 'favcat_whitelist' in ehentai or 'listen_categories' not in ehentai:
+            return
+        
+        print(f"检测到旧的 listen_categories 配置，正在迁移到 favcat_whitelist...")
+        
+        listen_categories = ehentai.get('listen_categories', '')
+        
+        # 转换为列表格式
+        if isinstance(listen_categories, list):
+            # 如果已经是列表，直接重命名
+            favcat_whitelist = [str(cat).strip() for cat in listen_categories]
+        elif isinstance(listen_categories, str):
+            # 如果是字符串
+            if listen_categories.strip() == '':
+                # 空字符串 -> 空列表（表示所有）
+                favcat_whitelist = []
+            else:
+                # "0,1,2" -> [0, 1, 2]
+                favcat_whitelist = [int(cat.strip()) for cat in listen_categories.split(',') if cat.strip().isdigit()]
+        else:
+            # 其他类型，设为空列表
+            favcat_whitelist = []
+        
+        # 添加新字段并删除旧字段
+        ehentai['favcat_whitelist'] = favcat_whitelist
+        del ehentai['listen_categories']
+        
+        config['ehentai'] = ehentai
+        
+        # 写回 yaml 文件
+        with open(yaml_path, 'w', encoding='utf-8') as yaml_file:
+            for i, (section, data) in enumerate(config.items()):
+                if i > 0:
+                    yaml_file.write('\n')
+                yaml.dump({section: data}, yaml_file, allow_unicode=True, sort_keys=False)
+        
+        print(f"listen_categories 迁移成功: {listen_categories} -> favcat_whitelist: {favcat_whitelist}")
+    
+    except Exception as e:
+        print(f"迁移 listen_categories 时出错: {e}")
+
 def migrate_ini_to_yaml():
     """
     检查是否存在 config.ini 文件，如果存在，则将其配置合并到 config.yaml，
@@ -131,8 +191,9 @@ def migrate_ini_to_yaml():
         except Exception as e:
             print(f"Error migrating config file: {e}")
     
-    # 在 ini 迁移后，检查并迁移 cookie 格式
+    # 在 ini 迁移后，执行其他迁移
     migrate_cookie_to_credentials()
+    migrate_listen_categories_to_favcat_whitelist()
 
 if __name__ == '__main__':
     # 允许直接运行此脚本进行测试
