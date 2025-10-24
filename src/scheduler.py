@@ -31,12 +31,6 @@ def trigger_undownloaded_favorites_download(logger=None, config=None):
         logger.warning("EH_TOOLS 未初始化，无法触发下载任务。")
         return 0, 0, 0
     
-    # 检查 cookie 是否有效
-    eh_valid, exh_valid, _ = ehentai_tool.is_valid_cookie()
-    if not (eh_valid or exh_valid):
-        logger.warning("E-Hentai/ExHentai cookie 无效，无法触发下载任务。")
-        return 0, 0, 0
-    
     undownloaded_favorites = task_db.get_undownloaded_favorites()
     if not undownloaded_favorites:
         logger.info("没有需要下载的新收藏夹项目。")
@@ -52,9 +46,8 @@ def trigger_undownloaded_favorites_download(logger=None, config=None):
     for fav in undownloaded_favorites:
         gid = fav['gid']
         token = fav['token']
-        # 动态构建 URL (优先使用 ExHentai)
-        domain = "exhentai.org" if exh_valid else "e-hentai.org"
-        url = f"https://{domain}/g/{gid}/{token}/"
+        # 默认使用 e-hentai.org
+        url = f"https://e-hentai.org/g/{gid}/{token}/"
         
         try:
             logger.info(f"为新画廊创建下载任务: {url}")
@@ -98,13 +91,7 @@ def sync_eh_favorites_job(auto_download=None):
                 logger.warning("EH_TOOLS 未初始化，跳过收藏夹同步。")
                 return
             
-            # 1. 检查 cookie 是否有效
-            eh_valid, exh_valid, _ = ehentai_tool.is_valid_cookie()
-            if not (eh_valid or exh_valid):
-                logger.warning("E-Hentai/ExHentai cookie 无效，跳过收藏夹同步。")
-                return
-
-            # 2. 从配置中获取要同步的收藏夹分类
+            # 1. 从配置中获取要同步的收藏夹分类
             favcat_list = config.get('EH_FAV_SYNC_FAVCAT', [])
             if not favcat_list:
                 logger.info("没有配置要同步的 E-Hentai 收藏夹分类，任务结束。")
@@ -258,6 +245,37 @@ def sync_eh_favorites_job(auto_download=None):
             logger.error(f"同步 E-Hentai 收藏夹时发生错误: {e}", exc_info=True)
 
 
+def refresh_eh_cookie_job():
+    """
+    每日验证 E-Hentai cookie 的有效性并更新资金信息。
+    通过调用 /api/ehentai/refresh API 来执行验证。
+    """
+    with scheduler.app.app_context():
+        logger = current_app.logger
+        logger.info("定时任务触发: 开始验证 E-Hentai Cookie...")
+        
+        try:
+            config = current_app.config
+            port = config.get('PORT', 5001)
+            api_url = f"http://127.0.0.1:{port}/api/ehentai/refresh"
+            
+            response = requests.get(api_url, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('status') == 'success':
+                    logger.info(f"E-Hentai Cookie 验证成功: EH={result.get('eh_valid')}, ExH={result.get('exh_valid')}, Funds={result.get('funds')}")
+                else:
+                    logger.warning(f"E-Hentai Cookie 验证失败: {result.get('message')}")
+            else:
+                logger.error(f"调用 /api/ehentai/refresh 失败: HTTP {response.status_code}")
+                
+        except requests.RequestException as e:
+            logger.error(f"调用 /api/ehentai/refresh 时发生网络错误: {e}")
+        except Exception as e:
+            logger.error(f"验证 E-Hentai Cookie 时发生错误: {e}", exc_info=True)
+
+
 def update_scheduler_jobs(app):
     """
     根据当前应用配置更新调度器中的任务。
@@ -288,6 +306,23 @@ def update_scheduler_jobs(app):
             # 如果功能被禁用，日志会告知用户任务已被移除（如果它之前存在）
             if existing_job:
                 app.logger.info("E-Hentai 收藏夹同步任务已禁用并移除。")
+        
+        # 添加每日 E-Hentai Cookie 验证任务
+        cookie_job_id = 'refresh_eh_cookie_daily'
+        existing_cookie_job = scheduler.get_job(cookie_job_id)
+        
+        if existing_cookie_job:
+            scheduler.remove_job(cookie_job_id)
+        
+        # 添加每日运行的 Cookie 验证任务（24小时间隔）
+        scheduler.add_job(
+            id=cookie_job_id,
+            func=refresh_eh_cookie_job,
+            trigger='interval',
+            hours=24,
+            misfire_grace_time=3600
+        )
+        app.logger.info("E-Hentai Cookie 验证任务已添加，将每 24 小时运行一次。")
 
 
 def init_scheduler(app):

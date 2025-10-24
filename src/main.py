@@ -1293,6 +1293,51 @@ def trigger_sync_favorites():
         global_logger.error(f"触发 E-Hentai 收藏夹同步任务失败: {e}")
         return json_response({'error': f'触发同步任务失败: {str(e)}'}), 500
 
+@app.route('/api/ehentai/refresh', methods=['GET'])
+def refresh_ehentai_cookie():
+    """
+    验证 E-Hentai cookie 的有效性并更新资金信息
+    返回验证状态和资金信息
+    """
+    try:
+        ehentai_tool = app.config.get('EH_TOOLS')
+        if not ehentai_tool:
+            global_logger.warning("EH_TOOLS 未初始化，无法验证 Cookie")
+            return json_response({
+                'error': 'E-Hentai tools not initialized'
+            }), 500
+        
+        # 验证 cookie
+        eh_valid, exh_valid, eh_funds = ehentai_tool.is_valid_cookie()
+        
+        if eh_valid or exh_valid:
+            # 更新资金信息
+            update_eh_funds(eh_funds)
+            global_logger.info(f"E-Hentai Cookie 验证成功 (EH: {eh_valid}, ExH: {exh_valid})")
+            
+            return json_response({
+                'status': 'success',
+                'eh_valid': eh_valid,
+                'exh_valid': exh_valid,
+                'funds': eh_funds,
+                'message': 'Cookie 验证成功'
+            }), 200
+        else:
+            global_logger.warning("E-Hentai Cookie 验证失败")
+            return json_response({
+                'status': 'failed',
+                'eh_valid': False,
+                'exh_valid': False,
+                'funds': {'GP': '-', 'Credits': '-'},
+                'message': 'Cookie 验证失败，请检查配置'
+            }), 200
+            
+    except Exception as e:
+        global_logger.error(f"验证 E-Hentai Cookie 时发生错误: {e}")
+        return json_response({
+            'error': f'验证 Cookie 时发生错误: {str(e)}'
+        }), 500
+
 @app.route('/api/ehentai/favorites/fetch', methods=['GET'])
 def fetch_undownloaded_favorites():
     """下载本地数据库中所有未下载的收藏"""

@@ -106,7 +106,7 @@ const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask
 
 const fetchFavcatOptions = async () => {
   try {
-    const response = await axios.get(`${API_BASE_URL}/ehentai/favcats`);
+    const response = await axios.get(`${API_BASE_URL}/ehentai/favorites/categories`);
     if (response.data && Array.isArray(response.data)) {
       const formattedOptions = response.data.map((fav: { id: string; name: string }) => ({
         value: fav.id,
