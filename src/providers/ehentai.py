@@ -75,18 +75,17 @@ class EHentaiTools:
         self.logger = logger
         self.session = requests.Session()
         self.session.headers.update(headers)
-        
+
         # 临时cookie缓存（运行时自动获取）
         self.cached_sk = None
         self.cached_igneous = None
-        
+
         # 设置基础认证cookie
         if ipb_member_id and ipb_pass_hash:
             for domain in ['.e-hentai.org', '.exhentai.org']:
                 self.session.cookies.set('ipb_member_id', ipb_member_id, domain=domain)
                 self.session.cookies.set('ipb_pass_hash', ipb_pass_hash, domain=domain)
 
-        
         self.favcat_map = {}
     
     def _update_cached_cookies(self):

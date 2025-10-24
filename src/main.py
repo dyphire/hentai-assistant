@@ -214,7 +214,7 @@ def check_config():
     interval_hours = parse_interval_to_hours(ehentai_config.get('interval', '6h'))
     app.config['EH_FAV_SYNC_INTERVAL'] = interval_hours
     app.config['EH_FAV_AUTO_DOWNLOAD'] = ehentai_config.get('auto_download_favorites', False)
-    
+
     # 首次扫描页数：0 表示全量扫描，其他数字表示扫描指定页数
     try:
         initial_scan_pages = int(ehentai_config.get('initial_scan_pages', 1))
@@ -222,7 +222,7 @@ def check_config():
     except (ValueError, TypeError):
         app.config['EH_FAV_INITIAL_SCAN_PAGES'] = 1
         logging.warning("Invalid 'ehentai.initial_scan_pages'. Falling back to default 1 page.")
-    
+
     # favcat_whitelist 支持空列表 (所有), 或 [0,1,2] (特定)
     favcat_whitelist = ehentai_config.get('favcat_whitelist', [])
     if not favcat_whitelist or favcat_whitelist == []:
@@ -459,6 +459,64 @@ def check_task_cancelled(task_id):
         if task and task.cancelled:
             raise Exception("Task was cancelled by user")
 
+def try_nhentai_fallback(gmetadata, logger=None):
+    """
+    尝试 nhentai 回退下载
+
+    Args:
+        gmetadata: ehentai 元数据
+        logger: 日志记录器
+
+    Returns:
+        tuple: (nhentai_url, nhentai_tool) 或 (None, None)
+    """
+    if not gmetadata:
+        return None, None
+
+    # 检查是否为 doujinshi 或 manga 分类
+    category = gmetadata.get('category', '').lower()
+    if category not in ['doujinshi', 'manga']:
+        return None, None
+
+    try:
+        title = gmetadata.get('title') or gmetadata.get('title_jpn')
+        if not title:
+            return None, None
+
+        # 使用 nhentai 工具进行搜索
+        nhentai_tool = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=logger)
+
+        # 获取原始标题和语言信息用于更精确的匹配
+        original_title = gmetadata.get('title_jpn')
+        language = None
+        for tag in gmetadata.get('tags', []):
+            if isinstance(tag, str):
+                if tag.startswith('language:'):
+                    lang_name = tag.split(':', 1)[1]
+                    # 排除 'translated' 和 'rewrite' 标签
+                    if lang_name not in ['translated', 'rewrite']:
+                        language = lang_name
+                        break
+
+        nhentai_id = nhentai_tool.search_by_title(title, original_title, language)
+        if logger:
+            logger.info(f"尝试搜索 nhentai: title='{title}', original_title='{original_title}', language='{language}' -> nhentai_id={nhentai_id}")
+
+        if nhentai_id:
+            if logger:
+                logger.info(f"找到匹配的 nhentai 画廊 {nhentai_id}，切换到 nhentai 下载")
+
+            nhentai_url = f'https://nhentai.net/g/{nhentai_id}/'
+
+            return nhentai_url, nhentai_tool
+
+    except Exception as e:
+        import traceback
+        if logger:
+            logger.warning(f"nhentai 回退失败: {e}")
+            logger.warning(f"完整错误信息: {traceback.format_exc()}")
+
+    return None, None
 
 def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=False):
     try:
@@ -607,14 +665,40 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
         gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('NHENTAI_COOKIE'), logger=logger)
     else:
         gallery_tool = app.config['EH_TOOLS']
- 
+
+    original_url = url
+
     # 获取画廊元数据
     gmetadata = gallery_tool.get_gmetadata(url)
-    
+
+    # 检查是否需要回退到 nhentai（仅在 archive 模式且 GP 不足时）
+    eh_funds = app.config.get('EH_FUNDS', {})
+    gp_available = eh_funds.get('GP', '0')
+    credits_available = eh_funds.get('Credits', 0)
+
+    # 解析 GP 值（去掉 'k' 后缀）
+    try:
+        if gp_available.endswith('k'):
+            gp_value = float(gp_available[:-1])
+        else:
+            gp_value = float(gp_available) / 1000
+    except (ValueError, TypeError):
+        gp_value = 0
+
+    # 如果 GP 不足（少于 10k）且是 archive 模式，尝试 nhentai
+    if not is_nhentai and mode == 'archive' and gp_value < 10 and gmetadata:
+        if logger:
+            logger.info(f"GP 不足 (当前: {gp_available})，尝试使用 nhentai 下载")
+
+        nhentai_url, nhentai_tool = try_nhentai_fallback(gmetadata, logger)
+        if nhentai_url:
+            url = nhentai_url
+            gallery_tool = nhentai_tool
+
     # 在获得 gmetadata 后，触发 task.start 事件
     if app.config['NOTIFICATION'].get('enable'):
         event_data = {
-            "url": url,
+            "url": original_url,
             "task_id": task_id,
             "gmetadata": gmetadata,
         }
@@ -646,7 +730,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
 
     dl = None
-    if is_nhentai:
+    if is_nhentai or original_url != url:
         # nhentai 直接下载
         dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
     else:
@@ -673,19 +757,53 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
                 else:
                     dl = gallery_tool._download(url=result[1], path=path, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
         else:
-            # 对于被删除的画廊，尝试从 API 中找到有效的种子链接
-            # 从 gmetadata.torrents 中找到日期最新的记录中的 hash 值
+            # 对于被删除的画廊，尝试多种回退方案
+            if logger:
+                logger.info("画廊可能已被删除，尝试多种回退方案...")
+
+            # 方案1: 尝试从 API 中找到有效的种子链接
             torrent_path = gallery_tool.get_deleted_gallery_torrent(gmetadata)
-            if not torrent_path:
-                raise ValueError("无法获取下载链接：画廊可能已被删除且没有可用的种子")
-            # 再将种子推送到 aria2, 种子将会下载到 dir
-            dl = send_to_aria2(torrent=torrent_path, dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+            if torrent_path:
+                if logger:
+                    logger.info("找到可用的种子文件，尝试下载...")
+                dl = send_to_aria2(torrent=torrent_path, dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+                if dl:
+                    if logger:
+                        logger.info("通过种子下载成功")
+                else:
+                    if logger:
+                        logger.warning("种子下载失败，继续尝试其他方案")
+            else:
+                if logger:
+                    logger.warning("未找到可用的种子文件")
+
+            # 方案2: 如果种子下载失败，尝试 nhentai 回退（仅对 doujinshi 和 manga）
+            if not dl and gmetadata:
+                nhentai_url, nhentai_tool = try_nhentai_fallback(gmetadata, logger)
+                if nhentai_url:
+                    url = nhentai_url
+                    gallery_tool = nhentai_tool
+
+                    # nhentai 直接下载
+                    dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
+                    if dl and logger:
+                        logger.info("nhentai 回退下载成功")
+
+            # 如果所有方案都失败，抛出错误
+            if not dl:
+                raise ValueError("无法获取下载链接：画廊可能已被删除且所有回退方案均失败")
+
+    # 检查是否被取消
     check_task_cancelled(task_id)
-    
+
     # 处理元数据
     metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
-    metadata['Web'] = url
-    
+    if is_nhentai and original_url != url:
+        # 如果切换到了 nhentai 下载，使用原始 ehentai 的 URL 作为 Web 字段
+        metadata['Web'] = original_url
+    else:
+        metadata['Web'] = url
+
     # 统一后处理
     final_path, comicinfo_metadata = post_download_processing(dl, metadata, task_id, logger, is_nhentai=is_nhentai)
     
