@@ -22,7 +22,7 @@ from providers import aria2
 from providers import ehentai
 from providers import nhentai
 from providers.ehtranslator import EhTagTranslator
-from utils import check_dirs, is_valid_zip, TaskStatus, parse_gallery_url
+from utils import check_dirs, is_valid_zip, TaskStatus, parse_gallery_url, parse_interval_to_hours
 from notification import notify
 import cbztool
 from database import task_db
@@ -210,7 +210,9 @@ def check_config():
 
     # E-Hentai 收藏夹同步设置 (扁平化结构)
     app.config['EH_FAV_SYNC_ENABLED'] = ehentai_config.get('favorite_sync', False)
-    app.config['EH_FAV_SYNC_INTERVAL'] = int(ehentai_config.get('interval_hours', 24))
+    # 解析 interval 配置并转换为小时数（保持浮点数以支持分钟级精度）
+    interval_hours = parse_interval_to_hours(ehentai_config.get('interval', '6h'))
+    app.config['EH_FAV_SYNC_INTERVAL'] = interval_hours
     app.config['EH_FAV_AUTO_DOWNLOAD'] = ehentai_config.get('auto_download_favorites', False)
     
     # 首次扫描页数：0 表示全量扫描，其他数字表示扫描指定页数

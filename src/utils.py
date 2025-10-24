@@ -134,3 +134,35 @@ def parse_gallery_url(url: str) -> tuple[int | None, str | None]:
         token = match.group(2)
         return gid, token
     return None, None
+
+def parse_interval_to_hours(interval_str):
+    """
+    解析 interval 配置，支持 m(分钟), h(小时), d(天) 后缀，默认为小时
+    返回小时数（浮点数）
+    
+    示例:
+        '30m' -> 0.5
+        '6h' -> 6.0
+        '1d' -> 24.0
+        '12' -> 12.0 (默认小时)
+    """
+    interval_str = str(interval_str).strip().lower()
+    try:
+        if interval_str.endswith('m'):
+            # 分钟
+            value = float(interval_str[:-1])
+            return value / 60
+        elif interval_str.endswith('h'):
+            # 小时
+            value = float(interval_str[:-1])
+            return value
+        elif interval_str.endswith('d'):
+            # 天
+            value = float(interval_str[:-1])
+            return value * 24
+        else:
+            # 没有单位，默认为小时
+            return float(interval_str)
+    except (ValueError, TypeError, AttributeError) as e:
+        logging.warning(f"Invalid interval format ('{interval_str}'). Falling back to default 24 hours. Error: {e}")
+        return 24.0

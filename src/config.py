@@ -207,35 +207,4 @@ def load_config():
                 converted_section[key] = value
         converted_config[section] = converted_section
 
-    # --- Final Validation ---
-    eh_config = converted_config.get('ehentai', {})
-    
-    # 解析 interval 配置，支持 m(分钟), h(小时), d(天) 后缀，默认为小时
-    interval_str = str(eh_config.get('interval', '6h')).strip().lower()
-    try:
-        # 解析 interval 格式
-        if interval_str.endswith('m'):
-            # 分钟
-            value = float(interval_str[:-1])
-            interval_hours = value / 60
-        elif interval_str.endswith('h'):
-            # 小时
-            value = float(interval_str[:-1])
-            interval_hours = value
-        elif interval_str.endswith('d'):
-            # 天
-            value = float(interval_str[:-1])
-            interval_hours = value * 24
-        else:
-            # 没有单位，默认为小时
-            interval_hours = float(interval_str)
-        
-        if interval_hours <= 0:
-            raise ValueError("Interval must be positive")
-        
-        eh_config['interval_hours'] = interval_hours
-    except (ValueError, TypeError, AttributeError) as e:
-        eh_config['interval_hours'] = 24
-        logging.warning(f"Invalid 'ehentai.interval' ('{interval_str}'). Falling back to default 24 hours. Error: {e}")
-
     return converted_config
