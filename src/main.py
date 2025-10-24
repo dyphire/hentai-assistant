@@ -259,7 +259,9 @@ def check_config():
         # 预热收藏夹列表缓存
         global_logger.info("正在预获取 E-Hentai 收藏夹列表...")
         eh.get_favcat_list()
-    hath_toggle = (eh_valid, exh_valid)
+    # 更新 E-Hentai 和 ExHentai 验证状态
+    app.config['EH_VALID'] = eh_valid
+    app.config['EXH_VALID'] = exh_valid
     update_eh_funds(eh_funds)
     nh_toggle = nh.is_valid_cookie()
 
@@ -344,8 +346,6 @@ def check_config():
                 stop_notification_process()
                 start_notification_process()
 
-    app.config['HATH_TOGGLE'] = hath_toggle
-    app.config['EXH_VALID'] = exh_valid
     app.config['NH_TOGGLE'] = nh_toggle
     app.config['ARIA2_TOGGLE'] = aria2_toggle
     app.config['KOMGA_TOGGLE'] = komga_toggle
@@ -401,13 +401,13 @@ def check_config():
 
 def get_eh_mode(config, mode):
     aria2 = config.get('ARIA2_TOGGLE', False)
-    hath = config.get('HATH_TOGGLE', (False, False))
+    eh_valid = config.get('EH_VALID', False)
     download_torrent = mode in ("torrent", "1") if mode else config.get('DOWNLOAD_TORRENT', True)
-    if hath[0] and not aria2:
+    if eh_valid and not aria2:
         return "archive"
     if aria2 and download_torrent:
         return "torrent"
-    elif hath[0]:
+    elif eh_valid:
         return "archive"
     return "torrent"
 
@@ -1070,7 +1070,8 @@ def get_config():
 
     # 添加状态信息
     config_data['status'] = {
-        'hath_toggle': app.config.get('HATH_TOGGLE', (False, False)),
+        'eh_valid': app.config.get('EH_VALID', False),
+        'exh_valid': app.config.get('EXH_VALID', False),
         'nh_toggle': app.config.get('NH_TOGGLE', False),
         'aria2_toggle': app.config.get('ARIA2_TOGGLE', False),
         'komga_toggle': app.config.get('KOMGA_TOGGLE', False),
@@ -1426,7 +1427,7 @@ def trigger_sync_favorites():
 def refresh_ehentai_cookie():
     """
     验证 E-Hentai cookie 的有效性并更新资金信息
-    返回验证状态和资金信息
+    返回验证状态、资金信息以及更新的 sk 和 igneous cookie
     """
     try:
         ehentai_tool = app.config.get('EH_TOOLS')
@@ -1439,6 +1440,13 @@ def refresh_ehentai_cookie():
         # 验证 cookie
         eh_valid, exh_valid, eh_funds = ehentai_tool.is_valid_cookie()
         
+        # 更新 E-Hentai 和 ExHentai 验证状态
+        app.config['EH_VALID'] = eh_valid
+        app.config['EXH_VALID'] = exh_valid
+        
+        # 获取更新后的临时 cookies
+        cached_cookies = ehentai_tool.get_cached_cookies()
+        
         if eh_valid or exh_valid:
             # 更新资金信息
             update_eh_funds(eh_funds)
@@ -1449,6 +1457,8 @@ def refresh_ehentai_cookie():
                 'eh_valid': eh_valid,
                 'exh_valid': exh_valid,
                 'funds': eh_funds,
+                'sk': cached_cookies.get('sk'),
+                'igneous': cached_cookies.get('igneous'),
                 'message': 'Cookie 验证成功'
             }), 200
         else:
@@ -1458,6 +1468,8 @@ def refresh_ehentai_cookie():
                 'eh_valid': False,
                 'exh_valid': False,
                 'funds': {'GP': '-', 'Credits': '-'},
+                'sk': None,
+                'igneous': None,
                 'message': 'Cookie 验证失败，请检查配置'
             }), 200
             
@@ -1466,6 +1478,47 @@ def refresh_ehentai_cookie():
         return json_response({
             'error': f'验证 Cookie 时发生错误: {str(e)}'
         }), 500
+
+@app.route('/api/ehentai/test_status', methods=['POST'])
+def test_ehentai_status():
+    """
+    测试接口：临时设置 E-Hentai 状态用于前端测试
+    参数: eh_valid (bool), exh_valid (bool)
+    例如: POST /api/ehentai/test_status?eh_valid=false&exh_valid=false
+    """
+    try:
+        eh_valid_param = request.args.get('eh_valid', '').lower()
+        exh_valid_param = request.args.get('exh_valid', '').lower()
+        
+        # 解析布尔值
+        def parse_bool(value):
+            if value in ('true', 't', '1', 'y', 'yes'):
+                return True
+            elif value in ('false', 'f', '0', 'n', 'no'):
+                return False
+            elif value in ('null', 'none', ''):
+                return None
+            return None
+        
+        eh_valid = parse_bool(eh_valid_param)
+        exh_valid = parse_bool(exh_valid_param)
+        
+        # 更新状态
+        app.config['EH_VALID'] = eh_valid
+        app.config['EXH_VALID'] = exh_valid
+        
+        global_logger.info(f"测试模式：设置 E-Hentai 状态为 EH_VALID={eh_valid}, EXH_VALID={exh_valid}")
+        
+        return json_response({
+            'message': '测试状态已设置',
+            'eh_valid': eh_valid,
+            'exh_valid': exh_valid,
+            'status_text': '正常' if exh_valid else ('异常' if (eh_valid is None and exh_valid is None) else '受限')
+        }), 200
+        
+    except Exception as e:
+        global_logger.error(f"设置测试状态失败: {e}")
+        return json_response({'error': f'设置测试状态失败: {str(e)}'}), 500
 
 @app.route('/api/ehentai/favorites/fetch', methods=['GET'])
 def fetch_undownloaded_favorites():

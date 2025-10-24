@@ -58,7 +58,8 @@ interface ConfigSection {
 }
 
 interface ConfigStatus {
-  hath_toggle: boolean;
+  eh_valid: boolean;
+  exh_valid: boolean;
   nh_toggle: boolean;
   aria2_toggle: boolean;
   komga_toggle: boolean;

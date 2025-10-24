@@ -11,7 +11,15 @@
             <span v-if="formattedCredits"> | Cr: {{ formattedCredits }}</span>
           </span>
         </div>
-        <span class="status-badge" :class="ehentaiStatusClass()">{{ ehentaiStatusText() }}</span>
+        <span
+          class="status-badge"
+          :class="[ehentaiStatusClass(), { 'clickable': isEhentaiRestricted(), 'refreshing': refreshing }]"
+          @click="handleEhentaiClick"
+          :title="isEhentaiRestricted() ? '点击刷新 Cookie' : ''"
+        >
+          <span v-if="refreshing" class="spinner"></span>
+          <span v-else>{{ ehentaiStatusText() }}</span>
+        </span>
       </div>
       <div class="status-item">
         <span class="service-name">NHentai</span>
@@ -38,7 +46,8 @@ import { ref, onMounted, computed } from 'vue';
 import axios from 'axios';
 
 interface ConfigStatus {
-  hath_toggle: [boolean | null, boolean | null];
+  eh_valid: boolean | null;
+  exh_valid: boolean | null;
   nh_toggle: boolean | null;
   aria2_toggle: boolean;
   komga_toggle: boolean;
@@ -51,7 +60,8 @@ interface ConfigStatus {
 }
 
 const status = ref<ConfigStatus>({
-    hath_toggle: [false, false],
+    eh_valid: false,
+    exh_valid: false,
     nh_toggle: null,
     aria2_toggle: false,
     komga_toggle: false,
@@ -59,6 +69,7 @@ const status = ref<ConfigStatus>({
 });
 const loading = ref(true);
 const error = ref<string | null>(null);
+const refreshing = ref(false);
 
 const API_BASE_URL = '/api';
 
@@ -108,25 +119,53 @@ const statusText = (s: boolean) => {
 };
 
 const ehentaiStatusClass = () => {
-  const [eh_valid, exh_valid] = status.value.hath_toggle;
-  if (exh_valid === true) {
+  if (status.value.exh_valid === true) {
     return 'status-success';
   }
-  if (eh_valid === null && exh_valid === null) {
+  if (status.value.eh_valid === null && status.value.exh_valid === null) {
     return 'status-error';
   }
   return 'status-warning';
 };
 
 const ehentaiStatusText = () => {
-  const [eh_valid, exh_valid] = status.value.hath_toggle;
-  if (exh_valid === true) {
+  if (status.value.exh_valid === true) {
     return '正常';
   }
-  if (eh_valid === null && exh_valid === null) {
+  if (status.value.eh_valid === null && status.value.exh_valid === null) {
     return '异常';
   }
   return '受限';
+};
+
+const isEhentaiRestricted = () => {
+  return ehentaiStatusClass() === 'status-warning';
+};
+
+const handleEhentaiClick = async () => {
+  if (!isEhentaiRestricted() || refreshing.value) {
+    return;
+  }
+  
+  refreshing.value = true;
+  try {
+    const response = await axios.get(`${API_BASE_URL}/ehentai/refresh`);
+    if (response.data.eh_valid !== undefined) {
+      status.value.eh_valid = response.data.eh_valid;
+      status.value.exh_valid = response.data.exh_valid;
+      if (response.data.funds) {
+        status.value.eh_funds = response.data.funds;
+      }
+    }
+  } catch (err) {
+    console.error('刷新 E-Hentai Cookie 失败:', err);
+    error.value = '刷新失败，请稍后重试';
+    setTimeout(() => {
+      error.value = null;
+    }, 3000);
+  } finally {
+    refreshing.value = false;
+  }
 };
 
 const nhentaiStatusClass = () => {
@@ -235,6 +274,49 @@ onMounted(fetchStatus);
 
 .status-warning {
   background-color: #ffcb21ff;
+}
+
+.status-badge.clickable {
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.status-badge.clickable:hover {
+  opacity: 0.8;
+  transform: scale(1.05);
+}
+
+.status-badge.clickable:active {
+  transform: scale(0.95);
+}
+
+.status-badge.refreshing {
+  position: relative;
+  pointer-events: none;
+  background-color: transparent !important;
+  border: none !important;
+  padding: 6px 12px;
+}
+
+.spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(203, 178, 33, 0.3);
+  border-top-color: #ffcb21;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.dark .spinner {
+  border: 2px solid rgba(255, 203, 33, 0.3);
+  border-top-color: #ffcb21;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .dark .status-item {
