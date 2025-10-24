@@ -80,10 +80,10 @@ def _parse_gallery(gal):
     for tag in tags_list:
         tag_type = tag['type']
         if tag_type == 'artist':
-            name = tag['name'].split('|')[0].strip().trim()
+            name = tag['name'].split('|')[0].strip()
             artists.append(name)
         elif tag_type == 'group':
-            name = tag['name'].split('|')[0].strip().trim()
+            name = tag['name'].split('|')[0].strip()
             groups.append(name)
         elif tag_type == 'parody':
             series.append(tag['name'])
@@ -161,6 +161,81 @@ class NHentaiTools:
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         })
         return session
+
+    def search_by_title(self, title, original_title=None, language=None):
+        """根据标题搜索 nhentai 画廊"""
+        try:
+            # 使用 nhentai API 搜索
+            url = f'https://nhentai.net/api/galleries/search?query={title}'
+            response = self.session.get(url)
+            response.raise_for_status()
+            result = response.json().get('result', [])
+
+            if self.logger:
+                self.logger.info(f"nhentai 搜索结果数量: {len(result)}")
+                if result:
+                    self.logger.info(f"第一个结果标题: {result[0]['title']}")
+
+            if result:
+                # 找到匹配的画廊
+                best_match = None
+                for item in result:
+                    try:
+                        gallery_title = item['title'].get('english') or item['title'].get('japanese') or ''
+                        gallery_title_jpn = item['title'].get('japanese') or ''
+
+                        # 检查标题匹配度 - 简化匹配逻辑
+                        title_match = title.lower() in gallery_title.lower()
+                        jpn_match = (original_title and gallery_title_jpn and
+                                   original_title.lower() in gallery_title_jpn.lower())
+
+                        # 检查语言匹配
+                        lang_match = True
+                        if language:
+                            gallery_tags = item.get('tags', [])
+                            gallery_langs = []
+                            for tag in gallery_tags:
+                                if tag.get('type') == 'language':
+                                    gallery_langs.append(tag.get('name'))
+
+                            if gallery_langs:
+                                # 标准化 ehentai 语言名称
+                                eh_lang_normalized = language.lower().strip()
+
+                                # 检查是否有匹配的语言
+                                lang_found = False
+                                for nh_lang in gallery_langs:
+                                    nh_lang_normalized = nh_lang.lower()
+                                    if eh_lang_normalized in nh_lang_normalized:
+                                        lang_found = True
+                                        break
+
+                                if not lang_found:
+                                    lang_match = False
+
+                            gallery_lang = ', '.join(gallery_langs) if gallery_langs else None
+
+                        if self.logger:
+                            self.logger.info(f"检查画廊 {item['id']}: title='{gallery_title}', title_match={title_match}, jpn_match={jpn_match}, lang_match={lang_match}, gallery_lang='{gallery_lang}'")
+
+                        if (title_match or jpn_match) and lang_match:
+                            best_match = item
+                            if self.logger:
+                                self.logger.info(f"找到匹配的画廊: {item['id']}")
+                            break
+                    except Exception as e:
+                        if self.logger:
+                            self.logger.warning(f"处理 nhentai 搜索结果项时出错: {e}, item: {item}")
+                        continue
+
+                if best_match:
+                    return best_match['id']
+        except Exception as e:
+            if self.logger:
+                self.logger.warning(f"搜索 nhentai 时出错: {e}")
+            else:
+                print(f"搜索 nhentai 时出错: {e}")
+        return None
 
     def _download_file(self, url, path, headers=None, task_id=None, tasks=None, tasks_lock=None):
         try:
