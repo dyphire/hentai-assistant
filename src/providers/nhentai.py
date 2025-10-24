@@ -166,7 +166,8 @@ class NHentaiTools:
         """根据标题搜索 nhentai 画廊"""
         try:
             # 使用 nhentai API 搜索
-            url = f'https://nhentai.net/api/galleries/search?query={title}'
+            query = re.sub(r'\[.*?\]|\(.*?\)', '', title).strip()
+            url = f'https://nhentai.net/api/galleries/search?query={query}'
             response = self.session.get(url)
             response.raise_for_status()
             result = response.json().get('result', [])
@@ -230,6 +231,14 @@ class NHentaiTools:
 
                 if best_match:
                     return best_match['id']
+                else:
+                    # 如果没有找到精确匹配，raise异常并返回第一个搜索结果的URL
+                    if result:
+                        nhentai_url = f"https://nhentai.net/g/{result[0]['id']}/"
+                        raise Exception(f"未找到匹配的画廊, 找到一个相似画廊: {nhentai_url}")
+                    else:
+                        raise Exception("未找到匹配的画廊")
+
         except Exception as e:
             if self.logger:
                 self.logger.warning(f"搜索 nhentai 时出错: {e}")
