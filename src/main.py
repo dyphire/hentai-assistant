@@ -743,14 +743,25 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
             url = url.replace("exhentai.org", "e-hentai.org")
         result = gallery_tool.get_download_link(url=url, mode=eh_mode)
         check_task_cancelled(task_id)
-                
+
         if result:
             if result[0] == 'torrent':
                 dl = send_to_aria2(torrent=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
                 if dl is None:
                     # 死种尝试 archive
-                    result = gallery_tool.get_download_link(url=url, mode='archive')
-                    dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+                    if gp_value < 10 and gmetadata:
+                        if logger:
+                            logger.info(f"GP 不足 (当前: {gp_available})，尝试使用 nhentai 下载")
+                        nhentai_url, nhentai_tool = try_nhentai_fallback(gmetadata, logger)
+                        if nhentai_url:
+                            url = nhentai_url
+                            gallery_tool = nhentai_tool
+
+                            # nhentai 直接下载
+                            dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
+                    else:
+                        result = gallery_tool.get_download_link(url=url, mode='archive')
+                        dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
             elif result[0] == 'archive':
                 if app.config.get('ARIA2_TOGGLE'):
                     dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
