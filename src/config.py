@@ -26,7 +26,8 @@ def get_default_config():
             'tags_translation': 'false',
             'remove_ads': 'false',
             'aggressive_series_detection': 'false', # 启用后，E-Hentai 会对 AltnateSeries 字段进行更激进的检测。
-            'openai_series_detection': 'false' # 启用后，使用配置号的 OpenAI 接口对标题进行系列名和序号的检测。
+            'openai_series_detection': 'false', # 启用后，使用配置号的 OpenAI 接口对标题进行系列名和序号的检测。
+            'prefer_openai_series': 'false' # 启用后，优先使用 OpenAI 进行系列识别，正则作为后备方案。
         },
         'ehentai': {
             'ipb_member_id': '',

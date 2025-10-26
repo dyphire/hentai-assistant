@@ -4,11 +4,29 @@ import langcodes
 
 from openai_helper import OpenAIHelper
 from providers import ehentai
+from utils import chinese_number_to_arabic
 
 def normalize_tilde(filename: str) -> str:
     filename = re.sub(r'([话話])(?!\s)', r'\1 ', filename)
     filename = re.sub(r'([~⁓～—_「-])', ' ', filename)
     return filename
+
+def extract_number_from_match(text: str) -> str:
+    """
+    从匹配到的文本中提取数字(阿拉伯数字或中文数字)
+    返回字符串形式的阿拉伯数字,如果无法提取则返回 None
+    """
+    # 优先匹配阿拉伯数字(支持小数)
+    arabic_match = re.search(r'\d+(?:\.\d+)?', text)
+    if arabic_match:
+        return arabic_match.group(0)
+    
+    # 尝试匹配中文数字
+    chinese_match = re.search(r'[一二三四五六七八九十壹贰叁肆伍陆柒捌玖拾]+', text)
+    if chinese_match:
+        return chinese_number_to_arabic(chinese_match.group(0))
+    
+    return None
 
 def clean_name(title):
     name = re.sub(r'[\s\-—_:：•·․,，。\'’?？!！~⁓～]+$', '', title)
@@ -104,10 +122,24 @@ class MetadataExtractor:
         ]
 
         filename = normalize_tilde(filename)
-        for pat in patterns:
+        for i, pat in enumerate(patterns):
             m = re.search(pat, filename, re.I)
             if m:
-                return clean_name(m.group(1)).strip()
+                series_name = clean_name(m.group(1)).strip()
+                
+                # 模式 6 (上中下前后) 不提取数字
+                if i == 5:
+                    return series_name, None
+                
+                # 从原始 filename 中,去掉 series_name 后的剩余部分提取数字
+                # 这样可以避免正则匹配范围不足的问题
+                series_end_pos = filename.find(series_name) + len(series_name)
+                remaining_text = filename[series_end_pos:]
+                number = extract_number_from_match(remaining_text)
+                
+                return series_name, number
+        
+        return None, None
             
     def get_series_for_multi_work_series(self, filename, logger=None):
         filename = normalize_tilde(filename)
@@ -124,10 +156,12 @@ class MetadataExtractor:
             )
             openai_result = helper.query(filename)
 
-            # 检查返回是否有效且无错误
-            if openai_result and not openai_result.get('error') and openai_result.get('series'):
+            # 检查返回是否有效 (query 失败时返回 None)
+            if openai_result and openai_result.get('series'):
                 if logger: logger.info(f"识别结果为: {openai_result}")
-                return openai_result.get('series')
+                series = openai_result.get('series')
+                number = openai_result.get('number')
+                return series, number
         
         # 如果没有匹配任何章节模式 → 返回第一个空格前的内容
         is_aggressive_series_detection = self.config.get('AGGRESSIVE_SERIES_DETECTION', False)
@@ -135,8 +169,10 @@ class MetadataExtractor:
             filename = filename.strip()
             idx = filename.find(' ')
             if idx == -1:
-                return  clean_name(filename).strip()
-            return clean_name(filename[:idx]).strip()
+                return clean_name(filename).strip(), None
+            return clean_name(filename[:idx]).strip(), None
+        
+        return None, None
         
     def fill_field(self, comicinfo, field, tags, prefixes):
         for prefix in prefixes:
@@ -228,17 +264,39 @@ class MetadataExtractor:
         translator = find_translator(html.unescape(data['title']))
         if translator: comicinfo['Translator'] = translator
 
-        # 尝试为一些具有系列特征的标题提取系列名
-        comicinfo['Series'] = self.extract_before_chapter(comicinfo['Title'], logger)
-        if not comicinfo.get('Series'):
-            # 为自带 multi-work series 标签的作品作进一步分析
-            series_keywords = ["multi-work series", "系列作品"]
-            comicinfo['Series'] = None
-            if comicinfo and comicinfo.get('Tags'):
-                tags_list = [tag.strip().lower() for tag in comicinfo['Tags'].split(',')]
-                matched = any(k.lower() in tags_list for k in series_keywords)
-                if matched:
-                    if logger: logger.info('即将为 Multi-work series 作品系列名进行识别')
-                    comicinfo['Series'] = self.get_series_for_multi_work_series(comicinfo['Title'], logger)
+        # 尝试为一些具有系列特征的标题提取系列名和集数
+        series_name = None
+        number = None
+        
+        # 检查是否有 multi-work series 标签
+        series_keywords = ["multi-work series", "系列作品"]
+        has_series_tag = False
+        if comicinfo and comicinfo.get('Tags'):
+            tags_list = [tag.strip().lower() for tag in comicinfo['Tags'].split(',')]
+            has_series_tag = any(k.lower() in tags_list for k in series_keywords)
+        
+        # 检查配置
+        prefer_openai = self.config.get('PREFER_OPENAI_SERIES', False)
+        
+        if prefer_openai and has_series_tag:
+            # 策略1: OpenAI/aggressive 优先 (仅限有 multi-work series 标签)
+            if logger: logger.info('检测到该作品为系列作品，优先使用 OpenAI 进行检测')
+            series_name, number = self.get_series_for_multi_work_series(comicinfo['Title'], logger)
+            
+            # 失败时使用标准正则作为补救
+            if not series_name:
+                if logger: logger.info('OpenAI 模式检测失败，使用标准正则作为回退方案')
+                series_name, number = self.extract_before_chapter(comicinfo['Title'], logger)
+        else:
+            # 策略2: 标准正则优先 (默认)
+            series_name, number = self.extract_before_chapter(comicinfo['Title'], logger)
+            
+            # 标准正则失败且有 multi-work series 标签时，尝试 aggressive 模式
+            if not series_name and has_series_tag:
+                if logger: logger.info('未检测到章节信息，尝试为系列作品使用 OpenAI 进行检测')
+                series_name, number = self.get_series_for_multi_work_series(comicinfo['Title'], logger)
+        
+        comicinfo['Series'] = series_name
+        comicinfo['Number'] = number
         
         return comicinfo

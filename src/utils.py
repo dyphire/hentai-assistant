@@ -166,3 +166,44 @@ def parse_interval_to_hours(interval_str):
     except (ValueError, TypeError, AttributeError) as e:
         logging.warning(f"Invalid interval format ('{interval_str}'). Falling back to default 24 hours. Error: {e}")
         return 24.0
+
+def chinese_number_to_arabic(cn_num: str) -> str:
+    """
+    将简单的中文数字转换为阿拉伯数字字符串
+    仅支持: 一、二、三、四、五、六、七、八、九、十 以及它们的组合
+    返回字符串形式的数字,如果无法转换则返回 None
+    """
+    cn_to_num = {
+        '一': 1, '二': 2, '三': 3, '四': 4, '五': 5,
+        '六': 6, '七': 7, '八': 8, '九': 9, '十': 10,
+        '壹': 1, '贰': 2, '叁': 3, '肆': 4, '伍': 5,
+        '陆': 6, '柒': 7, '捌': 8, '玖': 9, '拾': 10
+    }
+    
+    cn_num = cn_num.strip()
+    
+    # 单个汉字直接转换
+    if len(cn_num) == 1:
+        return str(cn_to_num.get(cn_num))
+    
+    # 处理 "十X" (10-19)
+    if cn_num.startswith(('十', '拾')) and len(cn_num) == 2:
+        unit = cn_to_num.get(cn_num[1])
+        if unit:
+            return str(10 + unit)
+    
+    # 处理 "X十" (20, 30, ..., 90)
+    if cn_num.endswith(('十', '拾')) and len(cn_num) == 2:
+        tens = cn_to_num.get(cn_num[0])
+        if tens and tens < 10:
+            return str(tens * 10)
+    
+    # 处理 "X十Y" (21-99)
+    if len(cn_num) == 3 and cn_num[1] in ['十', '拾']:
+        tens = cn_to_num.get(cn_num[0])
+        unit = cn_to_num.get(cn_num[2])
+        if tens and unit and tens < 10 and unit < 10:
+            return str(tens * 10 + unit)
+    
+    # 无法转换
+    return None

@@ -202,6 +202,7 @@ def check_config():
     app.config['REMOVE_ADS'] = advanced.get('remove_ads', False)
     app.config['AGGRESSIVE_SERIES_DETECTION'] = advanced.get('aggressive_series_detection', False)
     app.config['OPENAI_SERIES_DETECTION'] = advanced.get('openai_series_detection', False)
+    app.config['PREFER_OPENAI_SERIES'] = advanced.get('prefer_openai_series', False)
 
     # E-Hentai 设置
     ehentai_config = config_data.get('ehentai', {})
