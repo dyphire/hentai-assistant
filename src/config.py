@@ -72,7 +72,8 @@ def get_default_config():
             'manga': '{{manga}}',
             'genre': '{{genre}}',
             'languageiso': '{{languageiso}}',
-            'alternateseries': '{{series}}'
+            'alternateseries': '{{series}}',
+            'alternatenumber': '{{number}}'
         }
     }
 

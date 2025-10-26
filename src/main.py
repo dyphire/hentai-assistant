@@ -594,18 +594,17 @@ def post_download_processing(dl, metadata, task_id, logger=None):
             comicinfo_config = app.config.get('COMICINFO', {}) or {}
 
             # 定义一个从 config.yaml 中的小写键到 ComicInfo.xml 驼峰键的映射
+            # 只需映射多单词复合词，单个单词会通过 key.capitalize() 自动处理
             key_map = {
-                'title': 'Title',
-                'writer': 'Writer',
-                'penciller': 'Penciller',
-                'translator': 'Translator',
-                'tags': 'Tags',
-                'web': 'Web',
                 'agerating': 'AgeRating',
-                'manga': 'Manga',
-                'genre': 'Genre',
                 'languageiso': 'LanguageISO',
-                'alternateseries': 'AlternateSeries'
+                'alternateseries': 'AlternateSeries',
+                'alternatenumber': 'AlternateNumber',
+                'storyarc': 'StoryArc',
+                'storyarcnumber': 'StoryArcNumber',
+                'seriesgroup': 'SeriesGroup',
+                'coverartist':'CoverArtist',
+                'gtin': 'GTIN'
             }
 
             for key, value_template in comicinfo_config.items():
