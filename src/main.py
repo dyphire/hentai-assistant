@@ -21,6 +21,7 @@ from providers import komga
 from providers import aria2
 from providers import ehentai
 from providers import nhentai
+from providers import hitomi
 from providers.ehtranslator import EhTagTranslator
 from utils import check_dirs, is_valid_zip, TaskStatus, parse_gallery_url, parse_interval_to_hours
 from notification import notify
@@ -260,7 +261,9 @@ def check_config():
         # 预热收藏夹列表缓存
         global_logger.info("正在预获取 E-Hentai 收藏夹列表...")
         eh.get_favcat_list()
-    hath_toggle = (eh_valid, exh_valid)
+    # 更新 E-Hentai 和 ExHentai 验证状态
+    app.config['EH_VALID'] = eh_valid
+    app.config['EXH_VALID'] = exh_valid
     update_eh_funds(eh_funds)
     nh_toggle = nh.is_valid_cookie()
 
@@ -345,8 +348,6 @@ def check_config():
                 stop_notification_process()
                 start_notification_process()
 
-    app.config['HATH_TOGGLE'] = hath_toggle
-    app.config['EXH_VALID'] = exh_valid
     app.config['NH_TOGGLE'] = nh_toggle
     app.config['ARIA2_TOGGLE'] = aria2_toggle
     app.config['KOMGA_TOGGLE'] = komga_toggle
@@ -402,13 +403,13 @@ def check_config():
 
 def get_eh_mode(config, mode):
     aria2 = config.get('ARIA2_TOGGLE', False)
-    hath = config.get('HATH_TOGGLE', (False, False))
+    eh_valid = config.get('EH_VALID', False)
     download_torrent = mode in ("torrent", "1") if mode else config.get('DOWNLOAD_TORRENT', True)
-    if hath[0] and not aria2:
+    if eh_valid and not aria2:
         return "archive"
     if aria2 and download_torrent:
         return "torrent"
-    elif hath[0]:
+    elif eh_valid:
         return "archive"
     return "torrent"
 
@@ -418,6 +419,7 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
         check_task_cancelled(task_id)
 
     rpc = aria2.Aria2RPC(app.config.get('ARIA2_SERVER'), app.config.get('ARIA2_TOKEN'))
+    result = None
     if url != None:
         result = rpc.add_uri(url, dir=dir, out=out)
         if logger: logger.info(result)
@@ -426,6 +428,14 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
         if not app.config.get('KEEP_TORRENTS') == True:
             os.remove(torrent)
         if logger: logger.info(result)
+    else:
+        if logger: logger.error("send_to_aria2: 必须提供 url 或 torrent 参数")
+        return None
+
+    if result is None or 'result' not in result:
+        if logger: logger.error("send_to_aria2: 无法获取有效的下载任务结果")
+        return None
+
     gid = result['result']
 
     # 检查任务是否被取消
@@ -460,25 +470,55 @@ def check_task_cancelled(task_id):
         if task and task.cancelled:
             raise Exception("Task was cancelled by user")
 
-def try_nhentai_fallback(gmetadata, logger=None):
+def try_fallback_download(gmetadata, logger=None):
     """
-    尝试 nhentai 回退下载
+    尝试回退下载方案：hitomi -> nhentai
 
     Args:
         gmetadata: ehentai 元数据
         logger: 日志记录器
 
     Returns:
-        tuple: (nhentai_url, nhentai_tool) 或 (None, None)
+        tuple: (url, tool) 或 (None, None)
     """
     if not gmetadata:
         return None, None
 
     # 检查是否为 doujinshi 或 manga 分类
     category = gmetadata.get('category', '').lower()
-    if category not in ['doujinshi', 'manga']:
+    if category not in ['doujinshi', 'manga', 'artistcg', 'gamecg', 'imageset']:
         return None, None
 
+    # 首先尝试 hitomi gid 直接下载
+    try:
+        gid = gmetadata.get('gid')
+        if gid:
+            hitomi_tool = hitomi.HitomiTools(logger=logger)
+
+            # 先检查画廊是否存在
+            try:
+                gallery_data = hitomi_tool.get_gallery_data(gid)
+                if gallery_data and 'files' in gallery_data and len(gallery_data['files']) > 0:
+                    hitomi_url = f"https://hitomi.la/reader/{gid}.html"
+
+                    if logger:
+                        logger.info(f"优先尝试 hitomi gid 直接下载: gid={gid}, url={hitomi_url}, files={len(gallery_data['files'])}")
+
+                    return hitomi_url, hitomi_tool
+                else:
+                    if logger:
+                        logger.warning(f"Hitomi 画廊 {gid} 没有文件数据")
+            except ValueError as ve:
+                if logger:
+                    logger.warning(f"Hitomi 画廊 {gid} 不存在: {ve}")
+
+    except Exception as e:
+        if logger:
+            logger.warning(f"hitomi gid 下载失败: {e}")
+
+    # 如果 hitomi 失败，回退到 nhentai
+    if category not in ['doujinshi', 'manga']:
+        return None, None
     try:
         title = gmetadata.get('title') or gmetadata.get('title_jpn')
         if not title:
@@ -501,7 +541,7 @@ def try_nhentai_fallback(gmetadata, logger=None):
 
         nhentai_id = nhentai_tool.search_by_title(title, original_title, language)
         if logger:
-            logger.info(f"尝试搜索 nhentai: title='{title}', original_title='{original_title}', language='{language}' -> nhentai_id={nhentai_id}")
+            logger.info(f"hitomi 失败，回退到 nhentai 搜索: title='{title}', original_title='{original_title}', language='{language}' -> nhentai_id={nhentai_id}")
 
         if nhentai_id:
             if logger:
@@ -519,7 +559,7 @@ def try_nhentai_fallback(gmetadata, logger=None):
 
     return None, None
 
-def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=False):
+def post_download_processing(dl, metadata, task_id, logger=None):
     try:
         # 检查是否被取消
         check_task_cancelled(task_id)
@@ -618,6 +658,13 @@ def post_download_processing(dl, metadata, task_id, logger=None, is_nhentai=Fals
                     if not move_file_path:
                         (logger.warning if logger else print)(f"移动路径模板渲染结果为空, 回退到默认目录")
                         move_file_path = os.path.dirname(dl)
+                    else:
+                        # 检查模板是否包含文件名变量
+                        template_has_filename = '{{filename}}' in move_path_template
+                        if template_has_filename:
+                            # 如果模板包含filename，确保有扩展名
+                            if not os.path.splitext(move_file_path)[1].lower() in ['.zip', '.cbz']:
+                                move_file_path += '.cbz'
                 except Exception as e:
                     (logger.warning if logger else print)(f"移动路径模板渲染失败: {e}, 回退到默认目录")
                     move_file_path = os.path.dirname(dl)
@@ -661,9 +708,12 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
 
     # 判断平台
     is_nhentai = 'nhentai.net' in url
+    is_hitomi = 'hitomi.la' in url
 
     if is_nhentai:
         gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('NHENTAI_COOKIE'), logger=logger)
+    elif is_hitomi:
+        gallery_tool = hitomi.HitomiTools(logger=logger)
     else:
         gallery_tool = app.config['EH_TOOLS']
 
@@ -672,7 +722,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     # 获取画廊元数据
     gmetadata = gallery_tool.get_gmetadata(url)
 
-    # 检查是否需要回退到 nhentai（仅在 archive 模式且 GP 不足时）
+    # 检查是否需要回退到 hitomi 或 nhentai（仅在 archive 模式且 GP 不足时）
     eh_funds = app.config.get('EH_FUNDS', {})
     gp_available = eh_funds.get('GP', '0')
     credits_available = eh_funds.get('Credits', 0)
@@ -686,15 +736,15 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     except (ValueError, TypeError):
         gp_value = 0
 
-    # 如果 GP 不足（少于 10k）且是 archive 模式，尝试 nhentai
-    if not is_nhentai and mode == 'archive' and gp_value < 10 and gmetadata:
+    # 如果 GP 不足（少于 10k）且是 archive 模式，尝试回退 hitomi -> nhentai
+    if not is_nhentai and not is_hitomi and mode == 'archive' and gp_value < 10 and gmetadata:
         if logger:
-            logger.info(f"GP 不足 (当前: {gp_available})，尝试使用 nhentai 下载")
+            logger.info(f"GP 不足 (当前: {gp_available})，尝试使用兜底方案下载")
 
-        nhentai_url, nhentai_tool = try_nhentai_fallback(gmetadata, logger)
-        if nhentai_url:
-            url = nhentai_url
-            gallery_tool = nhentai_tool
+        fallback_url, fallback_tool = try_fallback_download(gmetadata, logger)
+        if fallback_url:
+            url = fallback_url
+            gallery_tool = fallback_tool
 
     # 在获得 gmetadata 后，触发 task.start 事件
     if app.config['NOTIFICATION'].get('enable'):
@@ -713,7 +763,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     else:
         title = html.unescape(gmetadata['title'])
     filename = f"{sanitize_filename(title)} [{gmetadata['gid']}]"
-    if not is_nhentai:
+    if not is_nhentai and not is_hitomi:
         filename += ".zip"
 
     if logger: logger.info(f"准备下载: {filename}")
@@ -727,11 +777,16 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     check_task_cancelled(task_id)
 
     # 下载路径
-    download_dir = './data/download/nhentai' if is_nhentai else './data/download/ehentai'
+    if is_nhentai:
+        download_dir = './data/download/nhentai'
+    elif is_hitomi:
+        download_dir = './data/download/hitomi'
+    else:
+        download_dir = './data/download/ehentai'
     path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
 
     dl = None
-    if is_nhentai or original_url != url:
+    if is_nhentai or is_hitomi or original_url != url:
         # nhentai 直接下载
         dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
     else:
@@ -742,16 +797,28 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
             url = url.replace("e-hentai.org", "exhentai.org")
         else:
             url = url.replace("exhentai.org", "e-hentai.org")
+
+        original_url = url
         result = gallery_tool.get_download_link(url=url, mode=eh_mode)
         check_task_cancelled(task_id)
-                
+
         if result:
             if result[0] == 'torrent':
                 dl = send_to_aria2(torrent=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
                 if dl is None:
                     # 死种尝试 archive
-                    result = gallery_tool.get_download_link(url=url, mode='archive')
-                    dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+                    if gp_value < 10 and gmetadata:
+                        if logger:
+                            logger.info(f"GP 不足 (当前: {gp_available})，尝试兜底方案下载")
+                        fallback_url, fallback_tool = try_fallback_download(gmetadata, logger)
+                        if fallback_url:
+                            url = fallback_url
+                            gallery_tool = fallback_tool
+
+                            dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
+                    else:
+                        result = gallery_tool.get_download_link(url=url, mode='archive')
+                        dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
             elif result[0] == 'archive':
                 if app.config.get('ARIA2_TOGGLE'):
                     dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
@@ -778,17 +845,16 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
                 if logger:
                     logger.warning("未找到可用的种子文件")
 
-            # 方案2: 如果种子下载失败，尝试 nhentai 回退（仅对 doujinshi 和 manga）
+            # 方案2: 如果种子下载失败，尝试回退 hitomi -> nhentai
             if not dl and gmetadata:
-                nhentai_url, nhentai_tool = try_nhentai_fallback(gmetadata, logger)
-                if nhentai_url:
-                    url = nhentai_url
-                    gallery_tool = nhentai_tool
+                fallback_url, fallback_tool = try_fallback_download(gmetadata, logger)
+                if fallback_url:
+                    url = fallback_url
+                    gallery_tool = fallback_tool
 
-                    # nhentai 直接下载
                     dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
                     if dl and logger:
-                        logger.info("nhentai 回退下载成功")
+                        logger.info("兜底下载成功")
 
             # 如果所有方案都失败，抛出错误
             if not dl:
@@ -799,15 +865,15 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
 
     # 处理元数据
     metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
-    if is_nhentai and original_url != url:
-        # 如果切换到了 nhentai 下载，使用原始 ehentai 的 URL 作为 Web 字段
-        metadata['Web'] = original_url
+    if not is_nhentai and not is_hitomi and original_url != url:
+        # 如果切换到了兜底下载，使用原始 ehentai 的 URL 作为 Web 字段
+        metadata['Web'] = original_url.split('#')[0].split('?')[0]
     else:
-        metadata['Web'] = url
+        metadata['Web'] = url.split('#')[0].split('?')[0]
 
     # 统一后处理
-    final_path, comicinfo_metadata = post_download_processing(dl, metadata, task_id, logger, is_nhentai=is_nhentai)
-    
+    final_path, comicinfo_metadata = post_download_processing(dl, metadata, task_id, logger)
+
     # 验证处理结果
     if final_path and is_valid_zip(final_path):
         
@@ -820,15 +886,15 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
         # 发送完成通知
         if app.config['NOTIFICATION'].get('enable'):
             event_data = {
-                "url": url,
+                "url": original_url,
                 "task_id": task_id,
                 "gmetadata": gmetadata,
                 "metadata": metadata,
                 }
             notify(event="task.complete", data=event_data, logger=logger, notification_config=app.config['NOTIFICATION'])
 
-        # 如果是收藏夹任务 (且不是nhentai)，执行特殊流程
-        if favcat is not False and not is_nhentai:
+        # 如果是收藏夹任务 (且不是nhentai和hitomi)，执行特殊流程
+        if favcat is not False and not is_nhentai and not is_hitomi:
             logger.info(f"Task {task_id} is a favorite E-Hentai gallery, triggering special process...")
             gid = gmetadata.get('gid')
             if gid:
@@ -1060,7 +1126,8 @@ def get_config():
 
     # 添加状态信息
     config_data['status'] = {
-        'hath_toggle': app.config.get('HATH_TOGGLE', (False, False)),
+        'eh_valid': app.config.get('EH_VALID', False),
+        'exh_valid': app.config.get('EXH_VALID', False),
         'nh_toggle': app.config.get('NH_TOGGLE', False),
         'aria2_toggle': app.config.get('ARIA2_TOGGLE', False),
         'komga_toggle': app.config.get('KOMGA_TOGGLE', False),
@@ -1416,7 +1483,7 @@ def trigger_sync_favorites():
 def refresh_ehentai_cookie():
     """
     验证 E-Hentai cookie 的有效性并更新资金信息
-    返回验证状态和资金信息
+    返回验证状态、资金信息以及更新的 sk 和 igneous cookie
     """
     try:
         ehentai_tool = app.config.get('EH_TOOLS')
@@ -1429,6 +1496,13 @@ def refresh_ehentai_cookie():
         # 验证 cookie
         eh_valid, exh_valid, eh_funds = ehentai_tool.is_valid_cookie()
         
+        # 更新 E-Hentai 和 ExHentai 验证状态
+        app.config['EH_VALID'] = eh_valid
+        app.config['EXH_VALID'] = exh_valid
+        
+        # 获取更新后的临时 cookies
+        cached_cookies = ehentai_tool.get_cached_cookies()
+        
         if eh_valid or exh_valid:
             # 更新资金信息
             update_eh_funds(eh_funds)
@@ -1439,6 +1513,8 @@ def refresh_ehentai_cookie():
                 'eh_valid': eh_valid,
                 'exh_valid': exh_valid,
                 'funds': eh_funds,
+                'sk': cached_cookies.get('sk'),
+                'igneous': cached_cookies.get('igneous'),
                 'message': 'Cookie 验证成功'
             }), 200
         else:
@@ -1448,6 +1524,8 @@ def refresh_ehentai_cookie():
                 'eh_valid': False,
                 'exh_valid': False,
                 'funds': {'GP': '-', 'Credits': '-'},
+                'sk': None,
+                'igneous': None,
                 'message': 'Cookie 验证失败，请检查配置'
             }), 200
             
@@ -1456,6 +1534,47 @@ def refresh_ehentai_cookie():
         return json_response({
             'error': f'验证 Cookie 时发生错误: {str(e)}'
         }), 500
+
+@app.route('/api/ehentai/test_status', methods=['POST'])
+def test_ehentai_status():
+    """
+    测试接口：临时设置 E-Hentai 状态用于前端测试
+    参数: eh_valid (bool), exh_valid (bool)
+    例如: POST /api/ehentai/test_status?eh_valid=false&exh_valid=false
+    """
+    try:
+        eh_valid_param = request.args.get('eh_valid', '').lower()
+        exh_valid_param = request.args.get('exh_valid', '').lower()
+        
+        # 解析布尔值
+        def parse_bool(value):
+            if value in ('true', 't', '1', 'y', 'yes'):
+                return True
+            elif value in ('false', 'f', '0', 'n', 'no'):
+                return False
+            elif value in ('null', 'none', ''):
+                return None
+            return None
+        
+        eh_valid = parse_bool(eh_valid_param)
+        exh_valid = parse_bool(exh_valid_param)
+        
+        # 更新状态
+        app.config['EH_VALID'] = eh_valid
+        app.config['EXH_VALID'] = exh_valid
+        
+        global_logger.info(f"测试模式：设置 E-Hentai 状态为 EH_VALID={eh_valid}, EXH_VALID={exh_valid}")
+        
+        return json_response({
+            'message': '测试状态已设置',
+            'eh_valid': eh_valid,
+            'exh_valid': exh_valid,
+            'status_text': '正常' if exh_valid else ('异常' if (eh_valid is None and exh_valid is None) else '受限')
+        }), 200
+        
+    except Exception as e:
+        global_logger.error(f"设置测试状态失败: {e}")
+        return json_response({'error': f'设置测试状态失败: {str(e)}'}), 500
 
 @app.route('/api/ehentai/favorites/fetch', methods=['GET'])
 def fetch_undownloaded_favorites():

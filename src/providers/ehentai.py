@@ -140,26 +140,45 @@ class EHentaiTools:
         # 无法解析，返回原字符串
         return time_str
 
-    def _check_url(self, url, name, error_msg, success_msg, keyword=None):
-        try:
-            response = self.session.get(url, allow_redirects=True, timeout=10)
-            final_url = response.url.lower()
-            valid = True
-            eh_funds = None
-            if 'login' in final_url or (keyword and keyword not in final_url):
-                valid = False
-                if self.logger:
-                    self.logger.error(error_msg)
-            else:
-                if name == "E-Hentai":
-                    eh_funds = self.get_funds(response.text)
-                if self.logger:
-                    self.logger.info(success_msg)
-            return valid, eh_funds
-        except Exception as e:
-            if self.logger:
-                self.logger.warning(f"无法打开 {url}, 请检查网络: {e}")
-            return None, None
+    def _check_url(self, url, name, error_msg, success_msg, keyword=None, max_retries=2):
+        """
+        检查 URL 是否可访问，如果返回 None 则自动重试
+        
+        Args:
+            max_retries: 最大重试次数（默认 2 次）
+        """
+        retry_count = 0
+        
+        while retry_count <= max_retries:
+            try:
+                response = self.session.get(url, allow_redirects=True, timeout=10)
+                final_url = response.url.lower()
+                valid = True
+                eh_funds = None
+                if 'login' in final_url or (keyword and keyword not in final_url):
+                    valid = False
+                    if self.logger:
+                        self.logger.error(error_msg)
+                else:
+                    if name == "E-Hentai":
+                        eh_funds = self.get_funds(response.text)
+                    if self.logger:
+                        self.logger.info(success_msg)
+                return valid, eh_funds
+            except Exception as e:
+                retry_count += 1
+                if retry_count <= max_retries:
+                    # 使用递增的重试间隔：第一次3秒，第二次5秒
+                    wait_time = 3 if retry_count == 1 else 5
+                    if self.logger:
+                        self.logger.warning(f"无法打开 {url} (尝试 {retry_count}/{max_retries + 1}): {e}，{wait_time}秒后重试...")
+                    time.sleep(wait_time)
+                else:
+                    if self.logger:
+                        self.logger.error(f"无法打开 {url}，已重试 {max_retries} 次仍失败: {e}")
+                    return None, None
+        
+        return None, None
 
     def is_valid_cookie(self):
         # 先检查 E-Hentai
