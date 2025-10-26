@@ -1,9 +1,10 @@
 import sqlite3
 import threading
+import os
 from datetime import datetime, timezone
 from typing import List, Dict, Optional, Tuple
 
-from utils import TaskStatus, parse_gallery_url
+from utils import TaskStatus, parse_gallery_url, check_dirs
 
 class TaskDatabase:
     STATUS_MAP = {
@@ -17,6 +18,12 @@ class TaskDatabase:
         self.db_path = db_path
         self.lock = threading.Lock()
         self._latest_added_cache = None  # 缓存最新的收藏时间
+        
+        # 确保数据库文件的父目录存在
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir:
+            check_dirs(db_dir)
+        
         self._init_database()
 
     def _get_conn(self):
