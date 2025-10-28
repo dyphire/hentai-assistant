@@ -448,7 +448,7 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
         return None
     else:
         filename = os.path.basename(file)
-        if filename.lower().endswith(('.zip', '.cbz')):
+        if filename.lower().endswith(('.7z', '.zip', '.cbz')):
             local_file_path = os.path.join(app.config.get('REAL_DOWNLOAD_DIR'), filename)
         else:
             local_file_path = os.path.join(app.config.get('REAL_DOWNLOAD_DIR'), os.path.basename(os.path.dirname(file)))
@@ -662,7 +662,7 @@ def post_download_processing(dl, metadata, task_id, logger=None):
                         template_has_filename = '{{filename}}' in move_path_template
                         if template_has_filename:
                             # 如果模板包含filename，确保有扩展名
-                            if not os.path.splitext(move_file_path)[1].lower() in ['.zip', '.cbz']:
+                            if not os.path.splitext(move_file_path)[1].lower() in ['.7z', '.zip', '.cbz']:
                                 move_file_path += '.cbz'
                 except Exception as e:
                     (logger.warning if logger else print)(f"移动路径模板渲染失败: {e}, 回退到默认目录")
@@ -670,7 +670,7 @@ def post_download_processing(dl, metadata, task_id, logger=None):
             else:
                 move_file_path = os.path.dirname(dl)
 
-            if not os.path.basename(move_file_path).lower().endswith(('.zip', '.cbz')):
+            if not os.path.basename(move_file_path).lower().endswith(('.7z', '.zip', '.cbz')):
                 move_file_path = os.path.join(move_file_path, os.path.basename(dl))
 
             cbz = cbztool.write_xml_to_zip(dl, comicinfo_metadata, app=app, logger=logger)
