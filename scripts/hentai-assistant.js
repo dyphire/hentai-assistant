@@ -1,13 +1,14 @@
 // ==UserScript==
 // @name         Hentai Assistant
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      2.0
 // @description  Add a "Hentai Assistant" button on e-hentai.org, exhentai.org and nhentai.net, with menu
 // @author       rosystain
 // @match        https://e-hentai.org/*
 // @match        https://exhentai.org/*
 // @match        https://nhentai.net/*
 // @match        https://nhentai.xxx/*
+// @match        https://hdoujin.org/*
 // @grant        GM_xmlhttpRequest
 // @grant        GM_setValue
 // @grant        GM_getValue
@@ -22,6 +23,7 @@
 
     const IS_EX = window.location.host.includes("exhentai");
     const IS_NHENTAI = window.location.host.includes("nhentai");
+    const IS_HDOUJIN = window.location.host.includes("hdoujin");
 
     // 使用 localStorage 存储设置
     function getSetting(key, defaultValue) {
@@ -181,7 +183,6 @@
                 return;
             }
 
-            // 检测是否为nhentai URL并添加额外参数
             let apiUrl = `${SERVER_URL}/api/download?url=${encodeURIComponent(url)}&mode=${mode}`;
 
             if (IS_NHENTAI) {
@@ -191,6 +192,17 @@
                 // 如果是详情页，尝试获取画廊ID
                 if (isNHentaiDetailPage()) {
                     const galleryInfo = getNHentaiGalleryInfo();
+                    if (galleryInfo) {
+                        apiUrl += `&gallery_id=${galleryInfo.id}&title=${encodeURIComponent(galleryInfo.title)}`;
+                    }
+                }
+            } else if (IS_HDOUJIN) {
+                // 为hdoujin添加特殊处理参数
+                apiUrl += '&source=hdoujin';
+
+                // 如果是详情页，尝试获取画廊ID
+                if (isHDoujinDetailPage()) {
+                    const galleryInfo = getHDoujinGalleryInfo();
                     if (galleryInfo) {
                         apiUrl += `&gallery_id=${galleryInfo.id}&title=${encodeURIComponent(galleryInfo.title)}`;
                     }
@@ -205,7 +217,7 @@
                         const data = JSON.parse(response.responseText);
                         if (data && data.task_id) {
                             const taskId = data.task_id;
-                            const siteName = IS_NHENTAI ? 'NHentai' : (IS_EX ? 'ExHentai' : 'E-Hentai');
+                            const siteName = IS_NHENTAI ? 'NHentai' : (IS_HDOUJIN ? 'HDoujin' : (IS_EX ? 'ExHentai' : 'E-Hentai'));
                             showToast(`已推送 ${siteName} 下载任务（mode=${mode}），task_id=${taskId}`, 'success');
 
                             // 添加到活跃任务并开始轮询进度
@@ -307,6 +319,15 @@
             progressPanel = null;
             if (Object.keys(activeTasks).length > 0) {
                 setTimeout(updateProgressPanel, 200);
+            }
+
+            // 页面变化时重新检测并注入按钮
+            if (IS_HDOUJIN) {
+                if (isHDoujinDetailPage()) {
+                    setTimeout(addHDoujinDetailButton, 1000);
+                } else if (isHDoujinListPage()) {
+                    setTimeout(addHDoujinListButtons, 1000);
+                }
             }
         }
     }, 1000);
@@ -799,6 +820,77 @@
         transform: scale(1.05);
         box-shadow: 0 4px 8px rgba(0,0,0,0.3);
     }
+
+    /* HDoujin 样式 */
+    .hdoujin-ha-container {
+        margin-top: -15px;
+        padding: 0;
+        border: none;
+        border-radius: 0;
+        background: transparent;
+        text-align: left;
+        display: inline-block;
+        vertical-align: top;
+    }
+
+    .hdoujin-ha-container.dark {
+        background: transparent;
+        color: #eee;
+    }
+
+    .hdoujin-ha-btn {
+        padding: 6px 12px;
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: normal;
+        transition: all 0.2s ease;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        display: inline-block;
+        line-height: 26px;
+        vertical-align: top;
+    }
+
+    .hdoujin-ha-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .hdoujin-ha-btn:active {
+        transform: translateY(0);
+    }
+
+    /* HDoujin 列表页按钮样式 */
+    .hdoujin-list-btn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 32px;
+        height: 32px;
+        background: rgba(128, 128, 128, 0.8);
+        border-radius: 8px;
+        color: white;
+        text-align: center;
+        line-height: 28px;
+        cursor: pointer;
+        font-size: 16px;
+        z-index: 10;
+        transition: all 0.2s ease;
+        border: 2px solid rgba(255, 255, 255, 0.3);
+        box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+
+    .hdoujin-list-btn:hover {
+        background: rgba(128, 128, 128, 1);
+        transform: scale(1.05);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+    }
     `;
     document.head.appendChild(style);
 
@@ -822,6 +914,98 @@
         };
     }
 
+    // ========== HDoujin 功能 ==========
+    // 获取hdoujin画廊信息
+    function getHDoujinGalleryInfo() {
+        const urlMatch = window.location.pathname.match(/^\/g\/(\d+)\/([a-f0-9]+)/);
+        if (!urlMatch) return null;
+
+        const galleryId = urlMatch[1];
+        const hash = urlMatch[2];
+
+        // 尝试从页面获取信息
+        const titleElement = document.querySelector('h1');
+        const title = titleElement ? titleElement.textContent.trim() : `HDoujin Gallery ${galleryId}`;
+
+        return {
+            id: galleryId,
+            hash: hash,
+            title: title,
+            url: window.location.href
+        };
+    }
+
+    // 读取并存储HDoujin认证信息
+    function storeHDoujinAuthTokens() {
+        try {
+            let hasChanges = false;
+
+            // 读取localStorage中的clearance信息
+            const clearance = localStorage.getItem('clearance');
+            const currentClearance = getSetting('hdoujin_clearance', '');
+            if (clearance && clearance !== currentClearance) {
+                // 存储clearance token
+                setSetting('hdoujin_clearance', clearance);
+                hasChanges = true;
+            }
+
+            // 读取localStorage中的token信息
+            const tokenData = localStorage.getItem('token');
+            if (tokenData) {
+                try {
+                    const token = JSON.parse(tokenData);
+                    if (token && token.refresh) {
+                        const currentRefresh = getSetting('hdoujin_refresh_token', '');
+                        if (token.refresh !== currentRefresh) {
+                            // 存储refresh token
+                            setSetting('hdoujin_refresh_token', token.refresh);
+                            hasChanges = true;
+                        }
+                    }
+                } catch (e) {
+                    // 解析失败，静默处理
+                }
+            }
+
+            // 如果有变化，通知后端更新
+            if (hasChanges && SERVER_URL) {
+                GM_xmlhttpRequest({
+                    method: 'POST',
+                    url: `${SERVER_URL}/api/hdoujin/refresh`,
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    data: JSON.stringify({
+                        clearance: clearance,
+                        refresh_token: token && token.refresh ? token.refresh : null
+                    }),
+                    onload: function (response) {
+                        try {
+                            const data = JSON.parse(response.responseText);
+                            if (data && data.success) {
+                                console.log('成功更新 HDoujin tokens');
+                            }
+                        } catch (e) {
+                            // 静默处理
+                        }
+                    },
+                    onerror: function (err) {
+                        // 静默处理
+                    }
+                });
+            }
+        } catch (e) {
+            // 读取失败，静默处理
+        }
+    }
+
+    // 读取并存储HDoujin认证信息
+    if (IS_HDOUJIN) {
+        storeHDoujinAuthTokens();
+        // 定期更新认证令牌（每30秒检查一次）
+        setInterval(storeHDoujinAuthTokens, 30000);
+    }
+
     // 检查是否为nhentai详情页
     function isNHentaiDetailPage() {
         return IS_NHENTAI && /^\/g\/\d+/.test(window.location.pathname);
@@ -829,7 +1013,23 @@
 
     // 检查是否为nhentai列表页
     function isNHentaiListPage() {
-        return IS_NHENTAI && (window.location.pathname === '/' || window.location.pathname.startsWith('/search') || window.location.pathname.startsWith('/tag'));
+        return IS_NHENTAI && (window.location.pathname === '/' 
+            || window.location.pathname.startsWith('/search')
+            || window.location.pathname.startsWith('/tag')
+            || window.location.pathname.startsWith('/favorites'));
+    }
+
+    // 检查是否为hdoujin详情页
+    function isHDoujinDetailPage() {
+        return IS_HDOUJIN && /^\/g\/\d+\/[a-f0-9]+/.test(window.location.pathname);
+    }
+
+    // 检查是否为hdoujin列表页
+    function isHDoujinListPage() {
+        return IS_HDOUJIN && (window.location.pathname === '/' 
+            || window.location.pathname.startsWith('/popular')
+            || window.location.pathname.startsWith('/browse')
+            || window.location.pathname.startsWith('/favorites'));
     }
 
     // ========== NHentai 按钮注入函数 ==========
@@ -865,6 +1065,44 @@
 
         // 同时检查页面下方的画廊卡片并注入按钮
         addNHentaiDetailGalleryButtons();
+    }
+
+    // ========== HDoujin 按钮注入函数 ==========
+    function addHDoujinDetailButton() {
+        // 查找包含操作按钮的div.actions元素
+        const actionsElement = document.querySelector('div.actions');
+        if (!actionsElement) return;
+
+        // 检查是否已经添加过按钮
+        if (document.querySelector('.hdoujin-ha-container')) return;
+
+        // 检测黑暗模式
+        const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+        // 创建下载按钮容器
+        const buttonContainer = document.createElement('div');
+        buttonContainer.className = `hdoujin-ha-container${isDark ? ' dark' : ''}`;
+
+        // 创建下载按钮
+        const downloadBtn = document.createElement('button');
+        downloadBtn.className = 'hdoujin-ha-btn';
+        downloadBtn.textContent = '📥 Hentai Assistant 下载';
+        downloadBtn.onclick = () => {
+            const currentUrl = window.location.href;
+            const galleryInfo = getHDoujinGalleryInfo();
+            if (galleryInfo) {
+                showToast(`正在推送 HDoujin 画廊: ${galleryInfo.title}`, 'info');
+            }
+            sendDownload(currentUrl, "archive");
+        };
+
+        buttonContainer.appendChild(downloadBtn);
+
+        // 在actions元素后插入按钮容器（在Start Reading按钮下方）
+        actionsElement.parentNode.insertBefore(buttonContainer, actionsElement.nextSibling);
+
+        // 同时检查页面下方的画廊卡片并注入按钮
+        addHDoujinDetailGalleryButtons();
     }
 
     // 为详情页下方的画廊卡片注入按钮
@@ -948,6 +1186,54 @@
         setTimeout(addNHentaiListButtons, 2000);
     }
 
+    function addHDoujinListButtons() {
+        // 只有在列表页时才注入按钮
+        if (!isHDoujinListPage()) return;
+
+        // HDoujin的画廊卡片选择器
+        const gallerySelectors = [
+            'a[href*="/g/"]',  // 包含画廊链接的元素
+        ];
+
+        const processedContainers = new Set();
+
+        gallerySelectors.forEach(selector => {
+            const galleryLinks = document.querySelectorAll(selector);
+            galleryLinks.forEach(link => {
+                // 确保是画廊链接（包含/g/路径且有hash）
+                if (!link.href || !link.href.match(/\/g\/\d+\/[a-f0-9]+/)) return;
+
+                const container = link.closest('article') || link.parentElement;
+                if (!container || processedContainers.has(container)) return;
+
+                // 检查是否已经注入了按钮
+                if (container.querySelector('.hdoujin-list-btn')) return;
+
+                const downloadBtn = document.createElement('div');
+                downloadBtn.textContent = '📥';
+                downloadBtn.title = '[Hentai Assistant] 推送下载';
+                downloadBtn.className = 'hdoujin-list-btn';
+                downloadBtn.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    showToast('正在推送 HDoujin 画廊下载任务...', 'info');
+                    sendDownload(link.href, "archive");
+                };
+
+                // 设置相对定位
+                if (container.style.position !== 'relative') {
+                    container.style.position = 'relative';
+                }
+
+                container.appendChild(downloadBtn);
+                processedContainers.add(container);
+            });
+        });
+
+        // 定期检查新加载的内容（处理分页和动态加载）
+        setTimeout(addHDoujinListButtons, 2000);
+    }
+
     // 直接执行页面检测和按钮添加
     if (isNHentaiDetailPage()) {
         // NHentai 详情页代码
@@ -955,6 +1241,12 @@
     } else if (isNHentaiListPage()) {
         // NHentai 列表页代码
         addNHentaiListButtons();
+    } else if (isHDoujinDetailPage()) {
+        // HDoujin 详情页代码 - 延迟执行以确保页面加载完成
+        setTimeout(addHDoujinDetailButton, 1000);
+    } else if (isHDoujinListPage()) {
+        // HDoujin 列表页代码 - 延迟执行以确保页面加载完成
+        setTimeout(addHDoujinListButtons, 1000);
     } else {
         const gd5Element = document.querySelector('#gmid #gd5');
         if (gd5Element) {

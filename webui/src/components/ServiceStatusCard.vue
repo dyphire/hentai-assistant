@@ -22,8 +22,8 @@
         </span>
       </div>
       <div class="status-item">
-        <span class="service-name">NHentai</span>
-        <span class="status-badge" :class="nhentaiStatusClass()">{{ nhentaiStatusText() }}</span>
+        <span class="service-name">HDoujin</span>
+        <span class="status-badge" :class="hdoujinStatusClass()">{{ hdoujinStatusText() }}</span>
       </div>
       <div class="status-item">
         <span class="service-name">Aria2</span>
@@ -48,7 +48,7 @@ import axios from 'axios';
 interface ConfigStatus {
   eh_valid: boolean | null;
   exh_valid: boolean | null;
-  nh_toggle: boolean | null;
+  hd_toggle: boolean | null;
   aria2_toggle: boolean;
   komga_toggle: boolean;
   notification_toggle: boolean;
@@ -62,7 +62,7 @@ interface ConfigStatus {
 const status = ref<ConfigStatus>({
     eh_valid: false,
     exh_valid: false,
-    nh_toggle: null,
+    hd_toggle: null,
     aria2_toggle: false,
     komga_toggle: false,
     notification_toggle: false,
@@ -146,7 +146,7 @@ const handleEhentaiClick = async () => {
   if (!isEhentaiRestricted() || refreshing.value) {
     return;
   }
-  
+
   refreshing.value = true;
   try {
     const response = await axios.get(`${API_BASE_URL}/ehentai/refresh`);
@@ -168,21 +168,21 @@ const handleEhentaiClick = async () => {
   }
 };
 
-const nhentaiStatusClass = () => {
-  if (status.value.nh_toggle === true) {
+const hdoujinStatusClass = () => {
+  if (status.value.hd_toggle === true) {
     return 'status-success';
   }
-  if (status.value.nh_toggle === false) {
+  if (status.value.hd_toggle === false) {
     return 'status-warning';
   }
   return 'status-error';
 };
 
-const nhentaiStatusText = () => {
-  if (status.value.nh_toggle === true) {
+const hdoujinStatusText = () => {
+  if (status.value.hd_toggle === true) {
     return '正常';
   }
-  if (status.value.nh_toggle === false) {
+  if (status.value.hd_toggle === false) {
     return '受限';
   }
   return '异常';

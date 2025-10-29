@@ -5,7 +5,7 @@ import logging
 import sqlite3
 from datetime import datetime, timezone
 
-from providers import komga, aria2, ehentai, nhentai
+from providers import komga, aria2, ehentai, nhentai, hdoujin
 from utils import TaskStatus
 
 # 定义配置文件的路径
@@ -40,6 +40,11 @@ def get_default_config():
         },
         'nhentai': {
             'cookie': ''
+        },
+        'hdoujin': {
+            'session_token': '',
+            'refresh_token': '',
+            'clearance_token': '',
         },
         'aria2': {
             'enable': 'false',

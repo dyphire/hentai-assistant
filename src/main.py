@@ -22,6 +22,7 @@ from providers import aria2
 from providers import ehentai
 from providers import nhentai
 from providers import hitomi
+from providers import hdoujin
 from providers.ehtranslator import EhTagTranslator
 from utils import check_dirs, is_valid_zip, TaskStatus, parse_gallery_url, parse_interval_to_hours
 from notification import notify
@@ -239,6 +240,15 @@ def check_config():
     nhentai_cookie = nhentai_config.get('cookie', '')
     app.config['NHENTAI_COOKIE'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
 
+    # hdoujin 设置
+    hdoujin_config = config_data.get('hdoujin', {})
+    hdoujin_session_token = hdoujin_config.get('session_token', '')
+    hdoujin_refresh_token = hdoujin_config.get('refresh_token', '')
+    hdoujin_clearance_token = hdoujin_config.get('clearance_token', '')
+    app.config['HDOUJIN_SESSION_TOKEN'] = hdoujin_session_token
+    app.config['HDOUJIN_REFRESH_TOKEN'] = hdoujin_refresh_token
+    app.config['HDOUJIN_CLEARANCE_TOKEN'] = hdoujin_clearance_token
+
     # 初始化 E-Hentai 工具类并存储在 app.config 中
     if 'EH_TOOLS' not in app.config:
         app.config['EH_TOOLS'] = ehentai.EHentaiTools(
@@ -253,9 +263,16 @@ def check_config():
             ipb_pass_hash=app.config['EH_IPB_PASS_HASH'],
             logger=global_logger
         )
-    
+
     eh = app.config['EH_TOOLS']
     nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)
+    hd = hdoujin.HDoujinTools(
+        session_token=app.config['HDOUJIN_SESSION_TOKEN'],
+        refresh_token=app.config['HDOUJIN_REFRESH_TOKEN'],
+        clearance_token=app.config['HDOUJIN_CLEARANCE_TOKEN'],
+        logger=global_logger
+    )
+    app.config['HD_TOOLS'] = hd
     eh_valid, exh_valid, eh_funds = eh.is_valid_cookie()
     if eh_valid or exh_valid:
         # 预热收藏夹列表缓存
@@ -266,6 +283,7 @@ def check_config():
     app.config['EXH_VALID'] = exh_valid
     update_eh_funds(eh_funds)
     nh_toggle = nh.is_valid_cookie()
+    hd_toggle = hd.is_valid_cookie()
 
     # Aria2 RPC 设置
     aria2_config = config_data.get('aria2', {})
@@ -349,6 +367,7 @@ def check_config():
                 start_notification_process()
 
     app.config['NH_TOGGLE'] = nh_toggle
+    app.config['HD_TOGGLE'] = hd_toggle
     app.config['ARIA2_TOGGLE'] = aria2_toggle
     app.config['KOMGA_TOGGLE'] = komga_toggle
     app.config['CHECKING_CONFIG'] = False
@@ -472,7 +491,7 @@ def check_task_cancelled(task_id):
 
 def try_fallback_download(gmetadata, logger=None):
     """
-    尝试回退下载方案：hitomi -> nhentai
+    尝试回退下载方案：hdoujin -> hitomi -> nhentai
 
     Args:
         gmetadata: ehentai 元数据
@@ -484,12 +503,53 @@ def try_fallback_download(gmetadata, logger=None):
     if not gmetadata:
         return None, None
 
-    # 检查是否为 doujinshi 或 manga 分类
     category = gmetadata.get('category', '').lower()
     if category not in ['doujinshi', 'manga', 'artistcg', 'gamecg', 'imageset']:
         return None, None
 
-    # 首先尝试 hitomi gid 直接下载
+    # 首先尝试 hdoujin
+    try:
+        title = gmetadata.get('title') or gmetadata.get('title_jpn')
+        if not title:
+            return None, None
+
+        # 使用 hdoujin 工具进行搜索
+        hdoujin_tool = hdoujin.HDoujinTools(
+            session_token=app.config['HDOUJIN_SESSION_TOKEN'],
+            clearance_token=app.config['HDOUJIN_CLEARANCE_TOKEN'],
+            logger=logger
+        )
+
+        # 获取原始标题和语言信息用于更精确的匹配
+        original_title = gmetadata.get('title_jpn')
+        language = None
+        for tag in gmetadata.get('tags', []):
+            if isinstance(tag, str):
+                if tag.startswith('language:'):
+                    lang_name = tag.split(':', 1)[1]
+                    if lang_name not in ['translated', 'rewrite', 'speechless']:
+                        language = lang_name
+                        break
+
+        hdoujin_id, hdoujin_key = hdoujin_tool.search_by_title(title, original_title, language)
+        if logger:
+            logger.info(f"优先尝试 hdoujin 搜索: title='{title}', original_title='{original_title}', language='{language}' -> hdoujin_id={hdoujin_id}")
+
+        if hdoujin_id and hdoujin_key:
+            if logger:
+                logger.info(f"找到匹配的 hdoujin 画廊 {hdoujin_id}，切换到 hdoujin 下载")
+
+            hdoujin_url = f'https://hdoujin.org/g/{hdoujin_id}/{hdoujin_key}/'
+
+            return hdoujin_url, hdoujin_tool
+
+    except Exception as e:
+        import traceback
+        if logger:
+            logger.warning(f"hdoujin 回退失败: {e}")
+            logger.warning(f"完整错误信息: {traceback.format_exc()}")
+
+    # 如果 hdoujin 失败，回退到 hitomi
     try:
         gid = gmetadata.get('gid')
         if gid:
@@ -502,7 +562,7 @@ def try_fallback_download(gmetadata, logger=None):
                     hitomi_url = f"https://hitomi.la/reader/{gid}.html"
 
                     if logger:
-                        logger.info(f"优先尝试 hitomi gid 直接下载: gid={gid}, url={hitomi_url}, files={len(gallery_data['files'])}")
+                        logger.info(f"hdoujin 失败，回退到 hitomi gid 直接下载: gid={gid}, url={hitomi_url}, files={len(gallery_data['files'])}")
 
                     return hitomi_url, hitomi_tool
                 else:
@@ -516,7 +576,7 @@ def try_fallback_download(gmetadata, logger=None):
         if logger:
             logger.warning(f"hitomi gid 下载失败: {e}")
 
-    # 如果 hitomi 失败，回退到 nhentai
+    # 如果 hitomi 也失败，最后尝试 nhentai
     if category not in ['doujinshi', 'manga']:
         return None, None
     try:
@@ -708,11 +768,18 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     # 判断平台
     is_nhentai = 'nhentai.net' in url
     is_hitomi = 'hitomi.la' in url
+    is_hdoujin = 'hdoujin.org' in url
 
     if is_nhentai:
         gallery_tool = nhentai.NHentaiTools(cookie=app.config.get('NHENTAI_COOKIE'), logger=logger)
     elif is_hitomi:
         gallery_tool = hitomi.HitomiTools(logger=logger)
+    elif is_hdoujin:
+        gallery_tool = hdoujin.HDoujinTools(
+            session_token=app.config['HDOUJIN_SESSION_TOKEN'],
+            clearance_token=app.config['HDOUJIN_CLEARANCE_TOKEN'],
+            logger=logger
+        )
     else:
         gallery_tool = app.config['EH_TOOLS']
 
@@ -736,7 +803,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
         gp_value = 0
 
     # 如果 GP 不足（少于 10k）且是 archive 模式，尝试回退 hitomi -> nhentai
-    if not is_nhentai and not is_hitomi and mode == 'archive' and gp_value < 10 and gmetadata:
+    if not is_nhentai and not is_hitomi and not is_hdoujin and mode == 'archive' and gp_value < 10 and gmetadata:
         if logger:
             logger.info(f"GP 不足 (当前: {gp_available})，尝试使用兜底方案下载")
 
@@ -762,7 +829,9 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     else:
         title = html.unescape(gmetadata['title'])
     filename = f"{sanitize_filename(title)} [{gmetadata['gid']}]"
-    if not is_nhentai and not is_hitomi:
+    if is_hdoujin:
+        filename += ".cbz"
+    elif not is_nhentai and not is_hitomi:
         filename += ".zip"
 
     if logger: logger.info(f"准备下载: {filename}")
@@ -780,14 +849,18 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
         download_dir = './data/download/nhentai'
     elif is_hitomi:
         download_dir = './data/download/hitomi'
+    elif is_hdoujin:
+        download_dir = './data/download/hdoujin'
     else:
         download_dir = './data/download/ehentai'
     path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
 
     dl = None
-    if is_nhentai or is_hitomi or original_url != url:
-        # nhentai 直接下载
+    if is_nhentai or is_hitomi or is_hdoujin or original_url != url:
+        # 直接下载
         dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
+        if dl is None:
+            raise ValueError("无法下载画廊，链接无效")
     else:
         # ehentai 下载模式选择
         eh_mode = get_eh_mode(app.config, mode)
@@ -864,7 +937,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
 
     # 处理元数据
     metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
-    if not is_nhentai and not is_hitomi and original_url != url:
+    if not is_nhentai and not is_hitomi and not is_hdoujin and original_url != url:
         # 如果切换到了兜底下载，使用原始 ehentai 的 URL 作为 Web 字段
         metadata['Web'] = original_url.split('#')[0].split('?')[0]
     else:
@@ -892,8 +965,8 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
                 }
             notify(event="task.complete", data=event_data, logger=logger, notification_config=app.config['NOTIFICATION'])
 
-        # 如果是收藏夹任务 (且不是nhentai和hitomi)，执行特殊流程
-        if favcat is not False and not is_nhentai and not is_hitomi:
+        # 如果是收藏夹任务 (且不是nhentai、hitomi和hdoujin)，执行特殊流程
+        if favcat is not False and not is_nhentai and not is_hitomi and not is_hdoujin:
             logger.info(f"Task {task_id} is a favorite E-Hentai gallery, triggering special process...")
             gid = gmetadata.get('gid')
             if gid:
@@ -1128,6 +1201,7 @@ def get_config():
         'eh_valid': app.config.get('EH_VALID', False),
         'exh_valid': app.config.get('EXH_VALID', False),
         'nh_toggle': app.config.get('NH_TOGGLE', False),
+        'hd_toggle': app.config.get('HD_TOGGLE', False),
         'aria2_toggle': app.config.get('ARIA2_TOGGLE', False),
         'komga_toggle': app.config.get('KOMGA_TOGGLE', False),
         'notification_toggle': notification_process is not None and notification_process.poll() is None,
@@ -1544,7 +1618,7 @@ def test_ehentai_status():
     try:
         eh_valid_param = request.args.get('eh_valid', '').lower()
         exh_valid_param = request.args.get('exh_valid', '').lower()
-        
+
         # 解析布尔值
         def parse_bool(value):
             if value in ('true', 't', '1', 'y', 'yes'):
@@ -1554,26 +1628,91 @@ def test_ehentai_status():
             elif value in ('null', 'none', ''):
                 return None
             return None
-        
+
         eh_valid = parse_bool(eh_valid_param)
         exh_valid = parse_bool(exh_valid_param)
-        
+
         # 更新状态
         app.config['EH_VALID'] = eh_valid
         app.config['EXH_VALID'] = exh_valid
-        
+
         global_logger.info(f"测试模式：设置 E-Hentai 状态为 EH_VALID={eh_valid}, EXH_VALID={exh_valid}")
-        
+
         return json_response({
             'message': '测试状态已设置',
             'eh_valid': eh_valid,
             'exh_valid': exh_valid,
             'status_text': '正常' if exh_valid else ('异常' if (eh_valid is None and exh_valid is None) else '受限')
         }), 200
-        
+
     except Exception as e:
         global_logger.error(f"设置测试状态失败: {e}")
         return json_response({'error': f'设置测试状态失败: {str(e)}'}), 500
+
+@app.route('/api/hdoujin/refresh', methods=['POST'])
+def refresh_hdoujin_token():
+    """
+    更新 HDoujin token 配置
+    从前端接收新的 clearance 和 refresh_token，并更新配置
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return json_response({'error': 'No JSON data provided'}), 400
+
+        clearance = data.get('clearance')
+        refresh_token = data.get('refresh_token')
+
+        if not clearance and not refresh_token:
+            return json_response({'error': 'No clearance or refresh_token provided'}), 400
+
+        # 更新配置
+        config_data = load_config()
+        hdoujin_config = config_data.get('hdoujin', {})
+
+        updated = False
+        if clearance and clearance != hdoujin_config.get('clearance_token'):
+            hdoujin_config['clearance_token'] = clearance
+            updated = True
+
+        if refresh_token and refresh_token != hdoujin_config.get('refresh_token'):
+            hdoujin_config['refresh_token'] = refresh_token
+            updated = True
+
+        if updated:
+            config_data['hdoujin'] = hdoujin_config
+            save_config(config_data)
+
+            # 重新初始化 HDoujin 工具
+            hd = hdoujin.HDoujinTools(
+                session_token=hdoujin_config.get('session_token', ''),
+                refresh_token=hdoujin_config.get('refresh_token', ''),
+                clearance_token=hdoujin_config.get('clearance_token', ''),
+                logger=global_logger
+            )
+            app.config['HD_TOOLS'] = hd
+
+            # 验证更新后的 token
+            hd_toggle = hd.is_valid_cookie()
+            app.config['HD_TOGGLE'] = hd_toggle
+
+            global_logger.info("成功更新 HDoujin tokens")
+            return json_response({
+                'success': True,
+                'message': '成功更新 HDoujin tokens',
+                'hd_valid': hd_toggle
+            }), 200
+        else:
+            return json_response({
+                'success': False,
+                'message': '未检测到 tokens 的变化'
+            }), 200
+
+    except Exception as e:
+        global_logger.error(f"更新 HDoujin Token 时发生错误: {e}")
+        return json_response({
+            'error': f'更新 Token 时发生错误: {str(e)}'
+        }), 500
 
 @app.route('/api/ehentai/favorites/fetch', methods=['GET'])
 def fetch_undownloaded_favorites():

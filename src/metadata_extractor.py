@@ -195,7 +195,7 @@ class MetadataExtractor:
                 namespace = matchTag.group(1).lower()
                 tag_name = matchTag.group(2).lower()
                 if namespace == 'language':
-                    if tag_name not in ['translated', 'rewrite']:
+                    if tag_name not in ['translated', 'rewrite', 'speechless']:
                         lang_obj = langcodes.find(tag_name)
                         if lang_obj:
                             comicinfo['LanguageISO'] = lang_obj.language
