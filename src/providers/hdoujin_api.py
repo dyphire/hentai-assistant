@@ -6,6 +6,15 @@ API_BASE = "https://api.hdoujin.org"
 AUTH_BASE = "https://auth.hdoujin.org"
 
 
+# 全局 User-Agent
+_user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+def set_user_agent(user_agent: str):
+    """设置全局 User-Agent"""
+    global _user_agent
+    if user_agent:
+        _user_agent = user_agent
+
 def _create_session() -> cloudscraper.CloudScraper:
     """
     使用 cloudscraper 来处理 Cloudflare 基本验证
@@ -30,7 +39,7 @@ def _create_session() -> cloudscraper.CloudScraper:
         'DNT': '1',
         'Connection': 'keep-alive',
         'Upgrade-Insecure-Requests': '1',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': _user_agent
     })
     return session
 
@@ -71,7 +80,7 @@ def _make_headers(session_token: Optional[str] = None, full_browser: bool = Fals
             "Sec-Fetch-Dest": "empty",
             "Sec-Fetch-Mode": "cors",
             "Sec-Fetch-Site": "same-site",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+            "User-Agent": _user_agent,
             "Content-Type": "application/json; charset=UTF-8"
         }
     else:
@@ -81,7 +90,7 @@ def _make_headers(session_token: Optional[str] = None, full_browser: bool = Fals
             "Content-Type": "application/json; charset=UTF-8",
             "Referer": "https://hdoujin.org/",
             "Origin": "https://hdoujin.org",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0",
+            "User-Agent": _user_agent,
         }
     if session_token:
         headers["Authorization"] = f"Bearer {session_token}"
@@ -89,7 +98,7 @@ def _make_headers(session_token: Optional[str] = None, full_browser: bool = Fals
 
 
 def _handle_response(resp: cloudscraper.requests.Response) -> Dict[str, Any]:
-    result = {"code": resp.status_code}
+    result: Dict[str, Any] = {"code": resp.status_code}
     ct = resp.headers.get("Content-Type", "")
     if resp.status_code <= 201:
         if ct and "application/json" in ct:
