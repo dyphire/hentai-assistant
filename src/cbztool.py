@@ -1,4 +1,5 @@
 import zipfile, os
+import gc
 import shutil
 import tempfile
 from xml.dom.minidom import parseString
@@ -8,6 +9,7 @@ from PIL import Image
 from natsort import natsorted
 import detectAd
 import re
+import py7zr
 
 # 广告文件名正则列表
 ad_file_pattern = re.compile(
@@ -29,6 +31,23 @@ def make_comicinfo_xml(metadata):
         dicttoxml.dicttoxml(metadata, custom_root='ComicInfo', attr_type=False)
     ).toprettyxml(indent="  ", encoding="UTF-8")
 
+def extract_images_only(file_path, temp_dir):
+    file_exts = ('.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp', '.avif', '.jxl', '.xml', '.json')
+
+    if file_path.lower().endswith('.7z'):
+        with py7zr.SevenZipFile(file_path, 'r') as archive:
+            archive.extractall(path=temp_dir)
+            archive.close()
+            gc.collect()
+    else:
+        with zipfile.ZipFile(file_path, 'r') as archive:
+            for name in archive.namelist():
+                if name.lower().endswith(file_exts):
+                    archive.extract(name, temp_dir)
+                    gc.collect()
+            archive.close()
+
+
 def write_xml_to_zip(file_path, metadata, app=None, logger=None):
     zip_file_root = os.path.dirname(file_path)
     zip_file_name = os.path.basename(file_path)
@@ -41,7 +60,7 @@ def write_xml_to_zip(file_path, metadata, app=None, logger=None):
 
     xml_content = make_comicinfo_xml(metadata)
 
-    # 检查输入是文件夹还是ZIP文件
+    # 检查输入是文件夹、ZIP文件还是7z文件
     if os.path.isdir(file_path):
         # 处理文件夹输入
         # 获取所有图片并自然排序
@@ -54,20 +73,30 @@ def write_xml_to_zip(file_path, metadata, app=None, logger=None):
                     img_files.append(rel_path)
         img_files = natsorted(img_files, key=lambda name: os.path.basename(name))
     else:
-        # 处理ZIP文件输入
-        # 获取所有图片并自然排序
-        with zipfile.ZipFile(file_path, 'r') as src_zip:
-            img_files = [f for f in src_zip.namelist() if f.lower().endswith(
-                ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.jxl')
-            )]
-        img_files = natsorted(img_files, key=lambda name: os.path.basename(name))
-
+        # 处理ZIP或7z文件输入，先解压到临时目录
+        temp_dir = tempfile.mkdtemp(dir=zip_file_root)
+        try:
+            extract_images_only(file_path, temp_dir)
+            # 获取所有图片并自然排序
+            img_files = []
+            for root, dirs, files in os.walk(temp_dir):
+                for file in files:
+                    if file.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.jxl')):
+                        full_path = os.path.join(root, file)
+                        rel_path = os.path.relpath(full_path, temp_dir)
+                        img_files.append(rel_path)
+            img_files = natsorted(img_files, key=lambda name: os.path.basename(name))
+        except Exception as e:
+            shutil.rmtree(temp_dir)
+            raise e
     if not img_files:
         msg = f"文件夹 {file_path} 内没有找到有效图片"
         if logger:
             logger.warning(msg)
         else:
             print(msg)
+        if 'temp_dir' in locals() and os.path.exists(temp_dir):
+            shutil.rmtree(temp_dir)
         return None
 
     # 广告页检测
@@ -103,8 +132,9 @@ def write_xml_to_zip(file_path, metadata, app=None, logger=None):
                         else:
                             normal_num += 1
                 else:
-                    # 从ZIP文件读取图片
-                    with zipfile.ZipFile(file_path, 'r') as src_zip, src_zip.open(name) as f, Image.open(f) as img:
+                    # 从临时目录读取图片
+                    img_path = os.path.join(temp_dir, name)
+                    with Image.open(img_path) as img:
                         img.load()
                         is_ad = detectAd.is_ad_img(img, logger)
                         if is_ad:
@@ -154,12 +184,17 @@ def write_xml_to_zip(file_path, metadata, app=None, logger=None):
                 with open(src_path, 'rb') as source, tgt_zip.open(name, 'w') as target:
                     shutil.copyfileobj(source, target)
             else:
-                # 从ZIP文件复制
-                with zipfile.ZipFile(file_path, 'r') as src_zip, src_zip.open(name) as source, tgt_zip.open(name, 'w') as target:
+                # 从临时目录复制文件
+                src_path = os.path.join(temp_dir, name)
+                with open(src_path, 'rb') as source, tgt_zip.open(name, 'w') as target:
                     shutil.copyfileobj(source, target)
 
         # 写入 ComicInfo.xml
         tgt_zip.writestr("ComicInfo.xml", xml_content)
+
+    # 清理临时目录（如果存在）
+    if 'temp_dir' in locals() and os.path.exists(temp_dir):
+        shutil.rmtree(temp_dir)
 
     # 文件替换逻辑
     if copy:
@@ -169,7 +204,7 @@ def write_xml_to_zip(file_path, metadata, app=None, logger=None):
                 completed_path = os.path.join(zip_file_root, 'Completed')
                 shutil.move(file_path, os.path.join(check_dirs(completed_path), zip_file_name))
             else:
-                # 对于ZIP文件，使用原有逻辑
+                # 对于ZIP或7z文件，使用原有逻辑
                 completed_path = os.path.join(zip_file_root, 'Completed')
                 os.renames(file_path, os.path.join(check_dirs(completed_path), zip_file_name))
         except Exception as e:
@@ -182,7 +217,7 @@ def write_xml_to_zip(file_path, metadata, app=None, logger=None):
                 # 对于文件夹，删除整个目录
                 shutil.rmtree(file_path)
             else:
-                # 对于ZIP文件，删除文件
+                # 对于ZIP或7z文件，删除文件
                 os.remove(file_path)
         except Exception as e:
             if logger:
@@ -192,4 +227,3 @@ def write_xml_to_zip(file_path, metadata, app=None, logger=None):
     shutil.move(target_zip_path, new_file_path)
 
     return new_file_path
-

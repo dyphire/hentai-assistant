@@ -400,6 +400,14 @@ class NHentaiTools:
                 else:
                     if self.logger:
                         self.logger.error(f"图片 {i}/{total_imgs} 所有链接下载失败: {img.name}")
+                    # 如果下载失败，退出整个下载过程
+                    if self.logger:
+                        self.logger.error(f"图片下载失败，退出下载过程")
+                    # 清理已下载的文件
+                    for file_path in downloaded_files:
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                    return None
                 if task_id and tasks and tasks_lock:
                     with tasks_lock:
                         if task_id in tasks:

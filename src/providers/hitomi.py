@@ -163,17 +163,21 @@ class HitomiTools:
             'Referer': referer
         }
 
-        try:
-            response = self.session.get(url, headers=headers, timeout=30)
-            response.raise_for_status()
+        for attempt in range(3):
+            try:
+                response = self.session.get(url, headers=headers, timeout=30)
+                response.raise_for_status()
 
-            with open(filename, 'wb') as f:
-                f.write(response.content)
+                with open(filename, 'wb') as f:
+                    f.write(response.content)
 
-            return True
-        except Exception as e:
-            print(f"Failed to download {filename}: {e}")
-            return False
+                return True
+            except Exception as e:
+                print(f"Failed to download {filename} (attempt {attempt+1}/3): {e}")
+                if attempt < 2:  # 如果不是最后一次尝试，等待一下
+                    time.sleep(1)
+
+        return False
 
     def create_gg_function_caller(self, func_name, gg_script):
         """创建GG函数调用器"""
@@ -256,6 +260,14 @@ class HitomiTools:
                     else:
                         if self.logger:
                             self.logger.error(f"图片 {i}/{total_imgs} 下载失败: {filename}")
+                        # 如果下载失败，退出整个下载过程
+                        if self.logger:
+                            self.logger.error(f"图片下载失败，退出下载过程")
+                        # 清理已下载的文件
+                        for file_path in downloaded_files:
+                            if os.path.exists(file_path):
+                                os.remove(file_path)
+                        return None
 
                     # 更新进度
                     if task_id and tasks and tasks_lock:
