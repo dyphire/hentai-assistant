@@ -245,9 +245,11 @@ def check_config():
     hdoujin_session_token = hdoujin_config.get('session_token', '')
     hdoujin_refresh_token = hdoujin_config.get('refresh_token', '')
     hdoujin_clearance_token = hdoujin_config.get('clearance_token', '')
+    hdoujin_user_agent = hdoujin_config.get('user_agent', '')
     app.config['HDOUJIN_SESSION_TOKEN'] = hdoujin_session_token
     app.config['HDOUJIN_REFRESH_TOKEN'] = hdoujin_refresh_token
     app.config['HDOUJIN_CLEARANCE_TOKEN'] = hdoujin_clearance_token
+    app.config['HDOUJIN_USER_AGENT'] = hdoujin_user_agent
 
     # 初始化 E-Hentai 工具类并存储在 app.config 中
     if 'EH_TOOLS' not in app.config:
@@ -270,6 +272,7 @@ def check_config():
         session_token=app.config['HDOUJIN_SESSION_TOKEN'],
         refresh_token=app.config['HDOUJIN_REFRESH_TOKEN'],
         clearance_token=app.config['HDOUJIN_CLEARANCE_TOKEN'],
+        user_agent=app.config['HDOUJIN_USER_AGENT'],
         logger=global_logger
     )
     app.config['HD_TOOLS'] = hd
@@ -516,7 +519,9 @@ def try_fallback_download(gmetadata, logger=None):
         # 使用 hdoujin 工具进行搜索
         hdoujin_tool = hdoujin.HDoujinTools(
             session_token=app.config['HDOUJIN_SESSION_TOKEN'],
+            refresh_token=app.config['HDOUJIN_REFRESH_TOKEN'],
             clearance_token=app.config['HDOUJIN_CLEARANCE_TOKEN'],
+            user_agent=app.config['HDOUJIN_USER_AGENT'],
             logger=logger
         )
 
@@ -777,7 +782,9 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     elif is_hdoujin:
         gallery_tool = hdoujin.HDoujinTools(
             session_token=app.config['HDOUJIN_SESSION_TOKEN'],
+            refresh_token=app.config['HDOUJIN_REFRESH_TOKEN'],
             clearance_token=app.config['HDOUJIN_CLEARANCE_TOKEN'],
+            user_agent=app.config['HDOUJIN_USER_AGENT'],
             logger=logger
         )
     else:
@@ -1653,7 +1660,7 @@ def test_ehentai_status():
 def refresh_hdoujin_token():
     """
     更新 HDoujin token 配置
-    从前端接收新的 clearance 和 refresh_token，并更新配置
+    从前端接收新的 clearance、refresh_token 和 user_agent，并更新配置
     """
     try:
         data = request.get_json()
@@ -1662,9 +1669,10 @@ def refresh_hdoujin_token():
 
         clearance = data.get('clearance')
         refresh_token = data.get('refresh_token')
+        user_agent = data.get('user_agent')
 
-        if not clearance and not refresh_token:
-            return json_response({'error': 'No clearance or refresh_token provided'}), 400
+        if not clearance and not refresh_token and not user_agent:
+            return json_response({'error': 'No clearance, refresh_token or user_agent provided'}), 400
 
         # 更新配置
         config_data = load_config()
@@ -1679,6 +1687,10 @@ def refresh_hdoujin_token():
             hdoujin_config['refresh_token'] = refresh_token
             updated = True
 
+        if user_agent and user_agent != hdoujin_config.get('user_agent'):
+            hdoujin_config['user_agent'] = user_agent
+            updated = True
+
         if updated:
             config_data['hdoujin'] = hdoujin_config
             save_config(config_data)
@@ -1688,6 +1700,7 @@ def refresh_hdoujin_token():
                 session_token=hdoujin_config.get('session_token', ''),
                 refresh_token=hdoujin_config.get('refresh_token', ''),
                 clearance_token=hdoujin_config.get('clearance_token', ''),
+                user_agent=hdoujin_config.get('user_agent', ''),
                 logger=global_logger
             )
             app.config['HD_TOOLS'] = hd
@@ -1696,16 +1709,16 @@ def refresh_hdoujin_token():
             hd_toggle = hd.is_valid_cookie()
             app.config['HD_TOGGLE'] = hd_toggle
 
-            global_logger.info("成功更新 HDoujin tokens")
+            global_logger.info("成功更新 HDoujin tokens 和 User-Agent")
             return json_response({
                 'success': True,
-                'message': '成功更新 HDoujin tokens',
+                'message': '成功更新 HDoujin tokens 和 User-Agent',
                 'hd_valid': hd_toggle
             }), 200
         else:
             return json_response({
                 'success': False,
-                'message': '未检测到 tokens 的变化'
+                'message': '未检测到 tokens 或 User-Agent 的变化'
             }), 200
 
     except Exception as e:

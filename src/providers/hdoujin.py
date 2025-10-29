@@ -9,16 +9,21 @@ from providers.hdoujin_api import (
     _get_session, books_search, books_get_detail, books_extra,
     books_read, books_download_page, books_download, tags, tags_filters,
     favorites_search, favorite_add, favorite_delete,
-    login, auth_check, auth_refresh, clearance_check, _wrap_search_term
+    login, auth_check, auth_refresh, clearance_check, _wrap_search_term,
+    set_user_agent
 )
 from utils import check_dirs
 
 class HDoujinTools:
-    def __init__(self, session_token=None, refresh_token=None, clearance_token=None, logger=None):
+    def __init__(self, session_token=None, refresh_token=None, clearance_token=None, user_agent=None, logger=None):
         self.logger = logger
         self.session_token = session_token
         self.refresh_token = refresh_token
         self.clearance_token = clearance_token
+        self.user_agent = user_agent
+        # 设置 User-Agent 到 API 模块
+        if user_agent:
+            set_user_agent(user_agent)
         self.session = _get_session()
 
     def get_tokens(self):
@@ -27,6 +32,7 @@ class HDoujinTools:
             'session_token': self.session_token,
             'refresh_token': self.refresh_token,
             'clearance_token': self.clearance_token,
+            'user_agent': self.user_agent,
         }
 
     def is_valid_cookie(self):
@@ -103,7 +109,7 @@ class HDoujinTools:
             return False
 
     def update_config_tokens(self, config_data):
-        """更新配置中的令牌"""
+        """更新配置中的令牌和 User-Agent"""
         try:
             # 获取当前令牌
             current_tokens = self.get_tokens()
@@ -115,9 +121,10 @@ class HDoujinTools:
             config_data['hdoujin']['session_token'] = current_tokens.get('session_token', '')
             config_data['hdoujin']['refresh_token'] = current_tokens.get('refresh_token', '')
             config_data['hdoujin']['clearance_token'] = current_tokens.get('clearance_token', '')
+            config_data['hdoujin']['user_agent'] = current_tokens.get('user_agent', '')
 
             if self.logger:
-                self.logger.info("HDoujin 令牌已更新到配置")
+                self.logger.info("HDoujin 令牌和 User-Agent 已更新到配置")
 
             return True
         except Exception as e:

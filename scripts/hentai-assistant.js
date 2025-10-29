@@ -967,6 +967,14 @@
                 }
             }
 
+            // 获取当前的 User-Agent
+            const userAgent = navigator.userAgent;
+            const currentUserAgent = getSetting('hdoujin_user_agent', '');
+            if (userAgent && userAgent !== currentUserAgent) {
+                setSetting('hdoujin_user_agent', userAgent);
+                hasChanges = true;
+            }
+
             // 如果有变化，通知后端更新
             if (hasChanges && SERVER_URL) {
                 GM_xmlhttpRequest({
@@ -977,7 +985,8 @@
                     },
                     data: JSON.stringify({
                         clearance: clearance,
-                        refresh_token: token && token.refresh ? token.refresh : null
+                        refresh_token: tokenData ? JSON.parse(tokenData).refresh : null,
+                        user_agent: userAgent
                     }),
                     onload: function (response) {
                         try {

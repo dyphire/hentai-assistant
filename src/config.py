@@ -45,6 +45,7 @@ def get_default_config():
             'session_token': '',
             'refresh_token': '',
             'clearance_token': '',
+            'user_agent': '' # 请在此处填入您获取 clearance_token 时使用的浏览器的 User-Agent
         },
         'aria2': {
             'enable': 'false',
