@@ -165,8 +165,13 @@ class NHentaiTools:
     def search_by_title(self, title, original_title=None, language=None):
         """根据标题搜索 nhentai 画廊"""
         try:
-            # 使用 nhentai API 搜索
-            query = re.sub(r'\[.*?\]|\(.*?\)', '', title).strip()
+            # 如果有original_title，优先使用original_title作为搜索词
+            search_title = original_title if original_title else title
+            query_parts = [re.sub(r'\[.*?\]|\(.*?\)', '', search_title).strip()]
+            if language:
+                query_parts.append(f"language:{language.lower()}")
+
+            query = " ".join(query_parts)
             url = f'https://nhentai.net/api/galleries/search?query={query}'
             response = self.session.get(url)
             response.raise_for_status()
@@ -188,38 +193,12 @@ class NHentaiTools:
                         # 检查标题匹配度 - 简化匹配逻辑
                         title_match = title.lower() in gallery_title.lower()
                         jpn_match = (original_title and gallery_title_jpn and
-                                   original_title.lower() in gallery_title_jpn.lower())
-
-                        # 检查语言匹配
-                        lang_match = True
-                        if language:
-                            gallery_tags = item.get('tags', [])
-                            gallery_langs = []
-                            for tag in gallery_tags:
-                                if tag.get('type') == 'language':
-                                    gallery_langs.append(tag.get('name'))
-
-                            if gallery_langs:
-                                # 标准化 ehentai 语言名称
-                                eh_lang_normalized = language.lower().strip()
-
-                                # 检查是否有匹配的语言
-                                lang_found = False
-                                for nh_lang in gallery_langs:
-                                    nh_lang_normalized = nh_lang.lower()
-                                    if eh_lang_normalized in nh_lang_normalized:
-                                        lang_found = True
-                                        break
-
-                                if not lang_found:
-                                    lang_match = False
-
-                            gallery_lang = ', '.join(gallery_langs) if gallery_langs else None
+                                    original_title.lower() in gallery_title_jpn.lower())
 
                         if self.logger:
-                            self.logger.info(f"检查画廊 {item['id']}: title='{gallery_title}', title_match={title_match}, jpn_match={jpn_match}, lang_match={lang_match}, gallery_lang='{gallery_lang}'")
+                            self.logger.info(f"检查画廊 {item['id']}: title='{gallery_title}', title_match={title_match}, jpn_match={jpn_match}")
 
-                        if (title_match or jpn_match) and lang_match:
+                        if title_match or jpn_match:
                             best_match = item
                             if self.logger:
                                 self.logger.info(f"找到匹配的画廊: {item['id']}")

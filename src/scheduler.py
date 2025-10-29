@@ -253,14 +253,14 @@ def refresh_eh_cookie_job():
     with scheduler.app.app_context():
         logger = current_app.logger
         logger.info("定时任务触发: 开始验证 E-Hentai Cookie...")
-        
+
         try:
             config = current_app.config
             port = config.get('PORT', 5001)
             api_url = f"http://127.0.0.1:{port}/api/ehentai/refresh"
-            
+
             response = requests.get(api_url, timeout=30)
-            
+
             if response.status_code == 200:
                 result = response.json()
                 if result.get('status') == 'success':
@@ -269,11 +269,45 @@ def refresh_eh_cookie_job():
                     logger.warning(f"E-Hentai Cookie 验证失败: {result.get('message')}")
             else:
                 logger.error(f"调用 /api/ehentai/refresh 失败: HTTP {response.status_code}")
-                
+
         except requests.RequestException as e:
             logger.error(f"调用 /api/ehentai/refresh 时发生网络错误: {e}")
         except Exception as e:
             logger.error(f"验证 E-Hentai Cookie 时发生错误: {e}", exc_info=True)
+
+
+def refresh_hdoujin_token_job():
+    """
+    每日验证 HDoujin token 的有效性并自动刷新。
+    通过调用 HDoujinTools 的 is_valid_cookie 方法来执行验证。
+    """
+    with scheduler.app.app_context():
+        logger = current_app.logger
+        logger.info("定时任务触发: 开始验证 HDoujin Token...")
+
+        try:
+            config = current_app.config
+            hdoujin_tool = config.get('HD_TOOLS')
+            if not hdoujin_tool:
+                logger.warning("HD_TOOLS 未初始化，跳过 HDoujin Token 验证。")
+                return
+
+            # 验证并自动刷新 token
+            is_valid = hdoujin_tool.is_valid_cookie()
+
+            if is_valid:
+                # 获取更新后的 token 并保存到配置
+                updated_tokens = hdoujin_tool.get_tokens()
+                config['HDOUJIN_SESSION_TOKEN'] = updated_tokens.get('session_token', '')
+                config['HDOUJIN_REFRESH_TOKEN'] = updated_tokens.get('refresh_token', '')
+                config['HDOUJIN_CLEARANCE_TOKEN'] = updated_tokens.get('clearance_token', '')
+
+                logger.info("HDoujin Token 验证成功")
+            else:
+                logger.warning("HDoujin Token 验证失败")
+
+        except Exception as e:
+            logger.error(f"验证 HDoujin Token 时发生错误: {e}", exc_info=True)
 
 
 def update_scheduler_jobs(app):
@@ -323,6 +357,23 @@ def update_scheduler_jobs(app):
             misfire_grace_time=3600
         )
         app.logger.info("E-Hentai Cookie 验证任务已添加，将每 24 小时运行一次。")
+
+        # 添加每日 HDoujin Token 验证任务
+        hdoujin_job_id = 'refresh_hdoujin_token_daily'
+        existing_hdoujin_job = scheduler.get_job(hdoujin_job_id)
+
+        if existing_hdoujin_job:
+            scheduler.remove_job(hdoujin_job_id)
+
+        # 添加每日运行的 HDoujin Token 验证任务（24小时间隔）
+        scheduler.add_job(
+            id=hdoujin_job_id,
+            func=refresh_hdoujin_token_job,
+            trigger='interval',
+            hours=24,
+            misfire_grace_time=3600
+        )
+        app.logger.info("HDoujin Token 验证任务已添加，将每 24 小时运行一次。")
 
 
 def init_scheduler(app):
