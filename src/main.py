@@ -533,7 +533,7 @@ def try_fallback_download(gmetadata, logger=None):
             if isinstance(tag, str):
                 if tag.startswith('language:'):
                     lang_name = tag.split(':', 1)[1]
-                    if lang_name not in ['translated', 'rewrite', 'speechless']:
+                    if lang_name not in ['translated', 'rewrite', 'speechless', 'text cleaned']:
                         language = lang_name
                         break
 
@@ -601,7 +601,7 @@ def try_fallback_download(gmetadata, logger=None):
                 if tag.startswith('language:'):
                     lang_name = tag.split(':', 1)[1]
                     # 排除 'translated' 和 'rewrite' 标签
-                    if lang_name not in ['translated', 'rewrite']:
+                    if lang_name not in ['translated', 'rewrite', 'text cleaned']:
                         language = lang_name
                         break
 
