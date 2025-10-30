@@ -11,7 +11,7 @@ def normalize_tilde(filename: str) -> str:
     filename = re.sub(r'([~⁓～—_「-])', ' ', filename)
     return filename
 
-def extract_number_from_match(text: str) -> str:
+def extract_number_from_match(text: str) -> str | None:
     """
     从匹配到的文本中提取数字(阿拉伯数字或中文数字)
     返回字符串形式的阿拉伯数字,如果无法提取则返回 None
@@ -186,7 +186,7 @@ class MetadataExtractor:
                 comicinfo[field] = ", ".join(values)
                 return
 
-    def parse_eh_tags(self, tags):
+    def parse_eh_tags(self, tags, logger=None):
         comicinfo = {'AgeRating':'R18+'}
         tag_list = []
         for tag in tags:
@@ -195,10 +195,15 @@ class MetadataExtractor:
                 namespace = matchTag.group(1).lower()
                 tag_name = matchTag.group(2).lower()
                 if namespace == 'language':
-                    if tag_name not in ['translated', 'rewrite', 'speechless']:
-                        lang_obj = langcodes.find(tag_name)
-                        if lang_obj:
-                            comicinfo['LanguageISO'] = lang_obj.language
+                    if tag_name not in ['translated', 'rewrite', 'speechless', 'text cleaned']:
+                        try:
+                            lang_obj = langcodes.find(tag_name)
+                            if lang_obj and lang_obj.language:
+                                comicinfo['LanguageISO'] = lang_obj.language
+                        except Exception as e:
+                            if logger:
+                                logger.warning(f"无法识别的语言标签: {tag_name}, 错误: {e}")
+                            continue
                 elif namespace == 'parody':
                     if tag_name not in ['original', 'various']:
                         tag_name = self.translator.get_translation(tag_name, namespace)
@@ -231,7 +236,7 @@ class MetadataExtractor:
     def parse_gmetadata(self, data, logger=None):
         comicinfo = {}
         if 'tags' in data:
-            comicinfo.update(self.parse_eh_tags(data['tags']))
+            comicinfo.update(self.parse_eh_tags(data['tags'], logger))
         
         if not data.get('category', '').lower() == 'non-h':
             comicinfo['Genre'] = 'Hentai'

@@ -471,10 +471,11 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
         return None
     else:
         filename = os.path.basename(file)
+        real_dir = app.config.get('REAL_DOWNLOAD_DIR') or '.'
         if filename.lower().endswith(('.7z', '.zip', '.cbz')):
-            local_file_path = os.path.join(app.config.get('REAL_DOWNLOAD_DIR'), filename)
+            local_file_path = os.path.join(real_dir, filename)
         else:
-            local_file_path = os.path.join(app.config.get('REAL_DOWNLOAD_DIR'), os.path.basename(os.path.dirname(file)))
+            local_file_path = os.path.join(real_dir, os.path.basename(os.path.dirname(file)))
 
     # 完成下载后, 为压缩包添加元数据
     if os.path.exists(file):
@@ -633,6 +634,8 @@ def post_download_processing(dl, metadata, task_id, logger=None):
             return None, None
 
         # 创建 ComicInfo.xml 并转换为 CBZ
+        # 确保 comicinfo_metadata 在任何分支中都有定义，避免未绑定变量
+        comicinfo_metadata = {}
         if metadata.get('Writer') or metadata.get('Tags'):
             # 准备一个包含所有可用字段的字典，用于格式化
             template_vars = {k.lower(): v for k, v in metadata.items()}
@@ -830,6 +833,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     
     if not gmetadata or 'gid' not in gmetadata:
         raise ValueError("Failed to retrieve valid gmetadata for the given URL.")
+    
     # 获取标题
     if gmetadata.get('title_jpn'):
         title = html.unescape(gmetadata['title_jpn'])
@@ -863,13 +867,14 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     path = os.path.join(os.path.abspath(check_dirs(download_dir)), filename)
 
     dl = None
+    # 对于非 E-Hentai 平台，直接下载
     if is_nhentai or is_hitomi or is_hdoujin or original_url != url:
         # 直接下载
         dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
         if dl is None:
             raise ValueError("无法下载画廊，链接无效")
     else:
-        # ehentai 下载模式选择
+        # E-Hentai 下载模式选择
         eh_mode = get_eh_mode(app.config, mode)
         # exhentai 限定的画廊在一些情况下能被 e-hentai 检索，但并不能通过 e-hentai 访问，因此当 exhentai 可用时，积极替换成 exhentai 的链接。
         if app.config.get('EXH_VALID'):
@@ -878,7 +883,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
             url = url.replace("exhentai.org", "e-hentai.org")
 
         original_url = url
-        result = gallery_tool.get_download_link(url=url, mode=eh_mode)
+        result = app.config['EH_TOOLS'].get_download_link(url=url, mode=eh_mode)
         check_task_cancelled(task_id)
 
         if result:
@@ -896,20 +901,20 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
 
                             dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
                     else:
-                        result = gallery_tool.get_download_link(url=url, mode='archive')
+                        result = app.config['EH_TOOLS'].get_download_link(url=url, mode='archive')
                         dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
             elif result[0] == 'archive':
                 if app.config.get('ARIA2_TOGGLE'):
                     dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
                 else:
-                    dl = gallery_tool._download(url=result[1], path=path, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
+                    dl = app.config['EH_TOOLS']._download(url=result[1], path=path, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
         else:
             # 对于被删除的画廊，尝试多种回退方案
             if logger:
                 logger.info("画廊可能已被删除，尝试多种回退方案...")
 
             # 方案1: 尝试从 API 中找到有效的种子链接
-            torrent_path = gallery_tool.get_deleted_gallery_torrent(gmetadata)
+            torrent_path = app.config['EH_TOOLS'].get_deleted_gallery_torrent(gmetadata)
             if torrent_path:
                 if logger:
                     logger.info("找到可用的种子文件，尝试下载...")
@@ -943,7 +948,10 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     check_task_cancelled(task_id)
 
     # 处理元数据
-    metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
+    if metadata_extractor:
+        metadata = metadata_extractor.parse_gmetadata(gmetadata, logger=logger)
+    else:
+        metadata = {}
     if not is_nhentai and not is_hitomi and not is_hdoujin and original_url != url:
         # 如果切换到了兜底下载，使用原始 ehentai 的 URL 作为 Web 字段
         metadata['Web'] = original_url.split('#')[0].split('?')[0]
@@ -974,44 +982,49 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
 
         # 如果是收藏夹任务 (且不是nhentai、hitomi和hdoujin)，执行特殊流程
         if favcat is not False and not is_nhentai and not is_hitomi and not is_hdoujin:
-            logger.info(f"Task {task_id} is a favorite E-Hentai gallery, triggering special process...")
+            if logger: logger.info(f"Task {task_id} is a favorite E-Hentai gallery, triggering special process...")
             gid = gmetadata.get('gid')
             if gid:
                 favorite_record = task_db.get_eh_favorite_by_gid(gid)
                 if favorite_record:
                     # 检查 favcat 是否需要更新
-                    if str(favorite_record.get('favcat')) != favcat:
-                        logger.info(f"Favorite record found for gid {gid} with a different favcat. Updating from {favorite_record.get('favcat')} to {favcat}.")
-                        task_db.update_favorite_favcat(gid, favcat)
+                    favorite_favcat = favorite_record.get('favcat')
+                    if favorite_favcat and str(favorite_favcat) != str(favcat):
+                        if logger: logger.info(f"Favorite record found for gid {gid} with a different favcat. Updating from {favorite_favcat} to {favcat}.")
+                        task_db.update_favorite_favcat(gid, str(favcat))
 
                     if not favorite_record.get('downloaded'):
-                        logger.info(f"Favorite record found for gid {gid}, marking as downloaded.")
+                        if logger: logger.info(f"Favorite record found for gid {gid}, marking as downloaded.")
                         task_db.mark_favorite_as_downloaded(gid)
                     else:
-                        logger.info(f"Favorite record for gid {gid} is already marked as downloaded.")
+                        if logger: logger.info(f"Favorite record for gid {gid} is already marked as downloaded.")
                 else:
-                    logger.info(f"No favorite record found for gid {gid}. Adding to online and local favorites.")
+                    if logger: logger.info(f"No favorite record found for gid {gid}. Adding to online and local favorites.")
                     token = gmetadata.get('token')
                     if token:
-                        if gallery_tool.add_to_favorites(gid=gid, token=token, favcat=favcat):
-                            # 添加到线上成功后，同步到本地数据库并标记为已下载
-                            # title 存储从 ComicInfo 提取的标题（Komga 标题）
-                            title = comicinfo_metadata.get('Title') if comicinfo_metadata else None
-                            
-                            fav_data = [{
-                                'url': f"https://exhentai.org/g/{gid}/{token}/",
-                                'title': title,
-                                'favcat': favcat
-                            }]
-                            task_db.add_eh_favorites(fav_data)
-                            task_db.mark_favorite_as_downloaded(gid)
-                            logger.info(f"Successfully added and marked gid {gid} as a local favorite.")
+                        # 只有 EHentaiTools 才有 add_to_favorites 方法
+                        if app.config['EH_TOOLS'] and hasattr(app.config['EH_TOOLS'], 'add_to_favorites'):
+                            if app.config['EH_TOOLS'].add_to_favorites(gid=gid, token=token, favcat=str(favcat)):
+                                # 添加到线上成功后，同步到本地数据库并标记为已下载
+                                # title 存储从 ComicInfo 提取的标题（Komga 标题）
+                                title = comicinfo_metadata.get('Title') if comicinfo_metadata else None
+                                
+                                fav_data = [{
+                                    'url': f"https://exhentai.org/g/{gid}/{token}/",
+                                    'title': title,
+                                    'favcat': str(favcat)
+                                }]
+                                task_db.add_eh_favorites(fav_data)
+                                task_db.mark_favorite_as_downloaded(gid)
+                                if logger: logger.info(f"Successfully added and marked gid {gid} as a local favorite.")
+                            else:
+                                if logger: logger.error(f"Failed to add gid {gid} to online favorites.")
                         else:
-                            logger.error(f"Failed to add gid {gid} to online favorites.")
+                            if logger: logger.warning(f"EHentaiTools not available for adding favorites")
                     else:
-                        logger.warning(f"Could not get token from gmetadata for favorite task {task_id}.")
+                        if logger: logger.warning(f"Could not get token from gmetadata for favorite task {task_id}.")
             else:
-                logger.warning(f"Could not get gid from gmetadata for favorite task {task_id}.")
+                if logger: logger.warning(f"Could not get gid from gmetadata for favorite task {task_id}.")
         return # 返回 metadata 以便装饰器或调用者处理完成通知
     else:
         error_message = "Downloaded file is not a valid zip archive."
@@ -1320,6 +1333,7 @@ def get_tasks():
         all_count = total
         in_progress_count = 0
         completed_count = 0
+        cancelled_count = 0
         failed_count = 0
 
     return json_response({
@@ -1727,6 +1741,73 @@ def refresh_hdoujin_token():
             'error': f'更新 Token 时发生错误: {str(e)}'
         }), 500
 
+@app.route('/api/ehentai/favorites/addfav', methods=['POST'])
+def add_favorite():
+    """
+    将画廊添加到 E-Hentai 收藏夹
+    
+    请求体格式:
+    {
+        "gid": 123456,
+        "token": "abc123def456",
+        "favcat": "0",
+        "note": "备注信息（可选）"
+    }
+    """
+    try:
+        try:
+            data = request.get_json()
+        except (ValueError, TypeError):
+            return json_response({'error': '请提供有效的 JSON 数据'}), 400
+        
+        if not data:
+            return json_response({'error': '请提供 JSON 数据'}), 400
+        
+        gid = data.get('gid')
+        token = data.get('token')
+        favcat = data.get('favcat', '0')  # 默认收藏夹
+        note = data.get('note', '')      # 备注，可选
+        
+        if not gid or not token:
+            return json_response({'error': '缺少必要参数：gid 和 token'}), 400
+        
+        # 获取 E-Hentai 工具实例
+        eh_tools = app.config.get('EH_TOOLS')
+        if not eh_tools:
+            return json_response({'error': 'E-Hentai 工具未初始化'}), 500
+        
+        # 调用 add_to_favorites 方法
+        success = eh_tools.add_to_favorites(
+            gid=int(gid), 
+            token=token, 
+            favcat=str(favcat), 
+            note=note
+        )
+        
+        if success:
+            global_logger.info(f"成功将画廊 (gid: {gid}) 添加到收藏夹 (favcat: {favcat})")
+            return json_response({
+                'message': f'成功将画廊添加到收藏夹',
+                'gid': gid,
+                'favcat': favcat,
+                'success': True
+            }), 200
+        else:
+            global_logger.warning(f"将画廊 (gid: {gid}) 添加到收藏夹失败")
+            return json_response({
+                'error': '将画廊添加到收藏夹失败',
+                'gid': gid,
+                'favcat': favcat,
+                'success': False
+            }), 500
+            
+    except ValueError as e:
+        global_logger.error(f"参数格式错误: {e}")
+        return json_response({'error': f'参数格式错误: {str(e)}'}), 400
+    except Exception as e:
+        global_logger.error(f"添加收藏夹时发生错误: {e}")
+        return json_response({'error': f'添加收藏夹时发生错误: {str(e)}'}), 500
+
 @app.route('/api/ehentai/favorites/fetch', methods=['GET'])
 def fetch_undownloaded_favorites():
     """下载本地数据库中所有未下载的收藏"""
@@ -1761,6 +1842,8 @@ def serve_vue_app(path):
         return redirect(f"http://localhost:5173/{path}") # 重定向到 Vue 开发服务器
     else: # 如果是生产模式
         static_dir = app.static_folder
+        if static_dir is None:
+            return "Static folder not configured on the Flask app.", 500
         # 首先尝试提供请求的路径作为静态文件（例如CSS/JS/图片等）
         requested_file = os.path.join(static_dir, path)
         if os.path.exists(requested_file) and not os.path.isdir(requested_file):
