@@ -33,16 +33,31 @@ from metadata_extractor import MetadataExtractor, parse_filename
 from migrate import migrate_ini_to_yaml
 from scheduler import init_scheduler, update_scheduler_jobs
 
+# import route modules (Blueprint)
+from routes.ehentai import bp as ehentai_bp
+from routes.task import bp as task_bp
+from routes.config import bp as config_bp
+from routes.hdoujin import bp as hdoujin_bp
+from routes.download import bp as download_bp
+
 # 全局变量用于存储子进程对象
 notification_process = None
 eh_translator = None
 metadata_extractor = None
 
-def start_notification_process():
+def start_notification_process(app_instance=None):
     """启动 notification.py 子进程"""
     global notification_process
+    
+    # 如果没有传入 app_instance，使用模块级的 app
+    if app_instance is None:
+        app_instance = app
+    
     if notification_process and notification_process.poll() is None:
         global_logger.info("notification.py 进程已在运行中。")
+        # 同时更新 app_instance.config
+        app_instance.config['NOTIFICATION_PROCESS'] = notification_process
+        app_instance.config['NOTIFICATION_PROCESS_PID'] = notification_process.pid
         return
 
     try:
@@ -52,12 +67,25 @@ def start_notification_process():
             'src/notification.py'
         ])
         global_logger.info(f"notification.py 已作为子进程启动, PID: {notification_process.pid}")
+
+        # 同时更新 app_instance.config，确保 config 路由能读取到
+        app_instance.config['NOTIFICATION_PROCESS'] = notification_process
+        app_instance.config['NOTIFICATION_PROCESS_PID'] = notification_process.pid
     except Exception as e:
         global_logger.error(f"启动 notification.py 失败: {e}")
+        notification_process = None
+        # 清除 app_instance.config 中的状态
+        app_instance.config['NOTIFICATION_PROCESS'] = None
+        app_instance.config['NOTIFICATION_PROCESS_PID'] = None
 
-def stop_notification_process():
+def stop_notification_process(app_instance=None):
     """停止 notification.py 子进程"""
     global notification_process
+    
+    # 如果没有传入 app_instance，使用模块级的 app
+    if app_instance is None:
+        app_instance = app
+    
     if notification_process and notification_process.poll() is None:
         global_logger.info(f"正在终止 notification.py 子进程, PID: {notification_process.pid}")
         notification_process.terminate()
@@ -71,6 +99,9 @@ def stop_notification_process():
             global_logger.info("notification.py 子进程已强制终止。")
         finally:
             notification_process = None
+            # 同时清除 app_instance.config 中的状态
+            app_instance.config['NOTIFICATION_PROCESS'] = None
+            app_instance.config['NOTIFICATION_PROCESS_PID'] = None
 
 
 # 配置 Flask 以服务 Vue.js 静态文件
@@ -181,13 +212,18 @@ def update_eh_funds(eh_funds):
         credits = eh_funds.get('Credits', '-')
         global_logger.info(f"E-Hentai 余额已更新: GP={gp}, Credits={credits}")
 
-def check_config():
+def check_config(app_instance=None):
     """检查并加载应用配置，并根据配置变化管理通知子进程。"""
     global notification_process, eh_translator, metadata_extractor
+    
+    # 如果没有传入 app_instance，使用模块级的 app
+    if app_instance is None:
+        app_instance = app
+    
     config_data = load_config()
 
     # 记录 Komga 的旧状态
-    was_komga_enabled = app.config.get('KOMGA_TOGGLE', False)
+    was_komga_enabled = app_instance.config.get('KOMGA_TOGGLE', False)
 
     # 通用设置
     general = config_data.get('general', {})
@@ -359,21 +395,24 @@ def check_config():
         if not is_komga_enabled:
             if was_komga_enabled:
                 global_logger.info("Komga 功能已禁用，正在停止通知监听器...")
-                stop_notification_process()
+                stop_notification_process(app_instance)
         else:
             if not was_komga_enabled:
                 global_logger.info("Komga 功能已启用，正在启动通知监听器...")
-                start_notification_process()
+                start_notification_process(app_instance)
             elif is_config_update:
                 global_logger.info("配置已更新，正在重启 Komga 通知监听器以应用更改...")
-                stop_notification_process()
-                start_notification_process()
+                stop_notification_process(app_instance)
+                start_notification_process(app_instance)
 
-    app.config['NH_TOGGLE'] = nh_toggle
-    app.config['HD_TOGGLE'] = hd_toggle
-    app.config['ARIA2_TOGGLE'] = aria2_toggle
-    app.config['KOMGA_TOGGLE'] = komga_toggle
-    app.config['CHECKING_CONFIG'] = False
+    app_instance.config['NH_TOGGLE'] = nh_toggle
+    app_instance.config['HD_TOGGLE'] = hd_toggle
+    app_instance.config['ARIA2_TOGGLE'] = aria2_toggle
+    app_instance.config['KOMGA_TOGGLE'] = komga_toggle
+    app_instance.config['CHECKING_CONFIG'] = False
+    
+    # 调试日志：确认更新
+    global_logger.info(f"[check_config] 已更新 app_instance.config['KOMGA_TOGGLE'] = {komga_toggle}, id(app_instance): {id(app_instance)}, id(app_instance.config): {id(app_instance.config)}")
 
     # 通知设置
     notification_config = config_data.get('notification', {})
@@ -435,10 +474,10 @@ def get_eh_mode(config, mode):
         return "archive"
     return "torrent"
 
-def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_id=None):
+def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_id=None, tasks=None, tasks_lock=None):
     # 检查任务是否被取消
     if task_id:
-        check_task_cancelled(task_id)
+        check_task_cancelled(task_id, tasks, tasks_lock)
 
     rpc = aria2.Aria2RPC(app.config.get('ARIA2_SERVER'), app.config.get('ARIA2_TOKEN'))
     result = None
@@ -462,7 +501,7 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
 
     # 检查任务是否被取消
     if task_id:
-        check_task_cancelled(task_id)
+        check_task_cancelled(task_id, tasks, tasks_lock)
 
     # 监视 aria2 的下载进度
     file = rpc.listen_status(gid, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
@@ -487,11 +526,18 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
 def sanitize_filename(s: str) -> str:
     return re.sub(r'[\\/:*?"<>|]', '_', s)
 
-def check_task_cancelled(task_id):
-    with tasks_lock:
-        task = tasks.get(task_id)
-        if task and task.cancelled:
-            raise Exception("Task was cancelled by user")
+def check_task_cancelled(task_id, tasks=None, tasks_lock=None):
+    # 如果没有传入 tasks 和 tasks_lock，从 app.config 获取
+    if tasks is None:
+        tasks = app.config.get('TASKS', {})
+    if tasks_lock is None:
+        tasks_lock = app.config.get('TASKS_LOCK')
+    
+    if tasks_lock:
+        with tasks_lock:
+            task = tasks.get(task_id)
+            if task and task.cancelled:
+                raise Exception("Task was cancelled by user")
 
 def try_fallback_download(gmetadata, logger=None):
     """
@@ -625,10 +671,10 @@ def try_fallback_download(gmetadata, logger=None):
 
     return None, None
 
-def post_download_processing(dl, metadata, task_id, logger=None):
+def post_download_processing(dl, metadata, task_id, logger=None, tasks=None, tasks_lock=None):
     try:
         # 检查是否被取消
-        check_task_cancelled(task_id)
+        check_task_cancelled(task_id, tasks, tasks_lock)
 
         if not dl:
             return None, None
@@ -753,7 +799,7 @@ def post_download_processing(dl, metadata, task_id, logger=None):
                 return None, None
 
         # 检查是否被取消
-        check_task_cancelled(task_id)
+        check_task_cancelled(task_id, tasks, tasks_lock)
 
         # 触发 Komga 媒体库入库扫描
         if app.config['KOMGA_TOGGLE'] and is_valid_zip(dl):
@@ -768,10 +814,17 @@ def post_download_processing(dl, metadata, task_id, logger=None):
         if logger: logger.error(f"Post-download processing failed: {e}")
         raise e
 
-def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
+def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=None, tasks_lock=None):
     if logger: logger.info(f"Task {task_id} started, downloading from: {url}, favcat: {favcat}")
+    
+    # 如果没有传入 tasks 和 tasks_lock，从 app.config 获取
+    if tasks is None:
+        tasks = app.config.get('TASKS', {})
+    if tasks_lock is None:
+        tasks_lock = app.config.get('TASKS_LOCK')
+    
     # 检查是否被取消
-    check_task_cancelled(task_id)
+    check_task_cancelled(task_id, tasks, tasks_lock)
 
     # 判断平台
     is_nhentai = 'nhentai.net' in url
@@ -848,12 +901,13 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
     if logger: logger.info(f"准备下载: {filename}")
 
     # 更新内存和数据库任务信息
-    with tasks_lock:
-        if task_id in tasks:
-            tasks[task_id].filename = title
+    if tasks_lock:
+        with tasks_lock:
+            if task_id in tasks:
+                tasks[task_id].filename = title
     task_db.update_task(task_id, filename=filename)
 
-    check_task_cancelled(task_id)
+    check_task_cancelled(task_id, tasks, tasks_lock)
 
     # 下载路径
     if is_nhentai:
@@ -884,11 +938,11 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
 
         original_url = url
         result = app.config['EH_TOOLS'].get_download_link(url=url, mode=eh_mode)
-        check_task_cancelled(task_id)
+        check_task_cancelled(task_id, tasks, tasks_lock)
 
         if result:
             if result[0] == 'torrent':
-                dl = send_to_aria2(torrent=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+                dl = send_to_aria2(torrent=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
                 if dl is None:
                     # 死种尝试 archive
                     if gp_value < 10 and gmetadata:
@@ -902,10 +956,10 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
                             dl = gallery_tool.download_gallery(url, path, task_id, tasks, tasks_lock)
                     else:
                         result = app.config['EH_TOOLS'].get_download_link(url=url, mode='archive')
-                        dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+                        dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
             elif result[0] == 'archive':
                 if app.config.get('ARIA2_TOGGLE'):
-                    dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+                    dl = send_to_aria2(url=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
                 else:
                     dl = app.config['EH_TOOLS']._download(url=result[1], path=path, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
         else:
@@ -918,7 +972,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
             if torrent_path:
                 if logger:
                     logger.info("找到可用的种子文件，尝试下载...")
-                dl = send_to_aria2(torrent=torrent_path, dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id)
+                dl = send_to_aria2(torrent=torrent_path, dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
                 if dl:
                     if logger:
                         logger.info("通过种子下载成功")
@@ -945,7 +999,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
                 raise ValueError("无法获取下载链接：画廊可能已被删除且所有回退方案均失败")
 
     # 检查是否被取消
-    check_task_cancelled(task_id)
+    check_task_cancelled(task_id, tasks, tasks_lock)
 
     # 处理元数据
     if metadata_extractor:
@@ -959,15 +1013,16 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
         metadata['Web'] = url.split('#')[0].split('?')[0]
 
     # 统一后处理
-    final_path, comicinfo_metadata = post_download_processing(dl, metadata, task_id, logger)
+    final_path, comicinfo_metadata = post_download_processing(dl, metadata, task_id, logger, tasks, tasks_lock)
 
     # 验证处理结果
     if final_path and is_valid_zip(final_path):
         
         if logger: logger.info(f"Task {task_id} completed successfully.")
-        with tasks_lock:
-            if task_id in tasks:
-                tasks[task_id].status = TaskStatus.COMPLETED
+        if tasks_lock:
+            with tasks_lock:
+                if task_id in tasks:
+                    tasks[task_id].status = TaskStatus.COMPLETED
         task_db.update_task(task_id, status=TaskStatus.COMPLETED)
         
         # 发送完成通知
@@ -1031,7 +1086,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False):
         # 此处直接抛出异常，装饰器会捕获并发送失败通知
         raise ValueError(error_message)
     
-def task_failure_processing(url, task_id, logger, tasks_lock, tasks):
+def task_failure_processing(url, task_id, logger, tasks, tasks_lock):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -1041,18 +1096,20 @@ def task_failure_processing(url, task_id, logger, tasks_lock, tasks):
                 error_msg = str(e)
                 if "cancelled by user" in error_msg:
                     if logger: logger.info(f"Task {task_id} was cancelled by user")
-                    with tasks_lock:
-                        if task_id in tasks:
-                            tasks[task_id].status = TaskStatus.CANCELLED
+                    if tasks_lock:
+                        with tasks_lock:
+                            if task_id in tasks:
+                                tasks[task_id].status = TaskStatus.CANCELLED
                     # 更新数据库状态
                     from database import task_db
                     task_db.update_task(task_id, status=TaskStatus.CANCELLED)
                 else:
                     if logger: logger.error(f"Task {task_id} failed with error: {e}")
-                    with tasks_lock:
-                        if task_id in tasks:
-                            tasks[task_id].status = TaskStatus.ERROR
-                            tasks[task_id].error = str(e)
+                    if tasks_lock:
+                        with tasks_lock:
+                            if task_id in tasks:
+                                tasks[task_id].status = TaskStatus.ERROR
+                                tasks[task_id].error = str(e)
                     # 更新数据库状态
                     from database import task_db
                     task_db.update_task(task_id, status=TaskStatus.ERROR, error=str(e))
@@ -1068,770 +1125,6 @@ def task_failure_processing(url, task_id, logger, tasks_lock, tasks):
         return wrapper
     return decorator
 
-@app.route('/api/download', methods=['GET'])
-def download_url():
-    url = request.args.get('url')
-    mode = request.args.get('mode')
-    fav_param = request.args.get('fav', 'false').lower()
-    
-    # 新的 fav 参数处理逻辑
-    # 如果是 true, t, 1, y, yes -> '0'
-    # 如果是数字 0-9 -> 该数字的字符串
-    # 否则 -> False
-    if fav_param in ('true', 't', '1', 'y', 'yes'):
-        favcat = '0'
-    elif fav_param.isdigit() and 0 <= int(fav_param) <= 9:
-        favcat = fav_param
-    else:
-        favcat = False
-
-    if not url:
-        return json_response({'error': 'No URL provided'}), 400
-    
-    # 两位年份+月日时分秒，使用UTC时间避免时区问题
-    task_id = datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')
-    logger, log_buffer = get_task_logger(task_id)
-    
-    # 动态应用装饰器
-    decorated_download_task = task_failure_processing(url, task_id, logger, tasks_lock, tasks)(download_gallery_task)
-    
-    future = executor.submit(decorated_download_task, url, mode, task_id, logger, favcat)
-    with tasks_lock:
-        tasks[task_id] = TaskInfo(future, logger, log_buffer)
-
-    # 添加任务到数据库，包含URL和mode信息用于重试
-    task_db.add_task(task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode)
-
-    return json_response({'message': f"Download task for {url} started with task ID {task_id}.", 'task_id': task_id}), 202
-
-@app.route('/api/stop_task/<task_id>', methods=['POST'])
-def stop_task(task_id):
-    with tasks_lock:
-        task = tasks.get(task_id)
-    if not task:
-        return json_response({'error': 'Task not found'}), 404
-
-    # 设置取消标志
-    task.cancelled = True
-
-    cancelled = task.future.cancel()
-    if cancelled:
-        with tasks_lock:
-            task.status = TaskStatus.CANCELLED
-        # 更新数据库状态
-        task_db.update_task(task_id, status=TaskStatus.CANCELLED)
-        return json_response({'message': 'Task cancelled'})
-    else:
-        return json_response({'message': 'Task could not be cancelled (可能已在运行或已完成)'})
-
-@app.route('/api/retry_task/<task_id>', methods=['POST'])
-def retry_task(task_id):
-    # 从数据库获取任务信息
-    task_info = task_db.get_task(task_id)
-    if not task_info:
-        return json_response({'error': 'Task not found'}), 404
-
-    # 检查任务状态是否为失败
-    if task_info['status'] != TaskStatus.ERROR:
-        return json_response({'error': 'Only failed tasks can be retried'}), 400
-
-    # 检查是否有URL信息
-    if not task_info.get('url'):
-        return json_response({'error': 'Task URL information is missing, cannot retry'}), 400
-
-    # 获取URL和mode
-    url = task_info['url']
-    mode = task_info.get('mode')
-
-    # 创建新的任务ID
-    new_task_id = datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')
-
-    # 添加新任务到数据库
-    task_db.add_task(new_task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode)
-
-    # 删除原来的失败任务
-    try:
-        with sqlite3.connect('./data/tasks.db') as conn:
-            conn.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
-            conn.commit()
-        print(f"已从数据库删除失败任务 {task_id}")
-    except sqlite3.Error as e:
-        print(f"删除失败任务时发生数据库错误: {e}")
-
-    # 从内存中删除原来的失败任务
-    with tasks_lock:
-        if task_id in tasks:
-            # 关闭日志缓冲区
-            if hasattr(tasks[task_id], 'log_buffer'):
-                tasks[task_id].log_buffer.close()
-            del tasks[task_id]
-
-    # 创建新的任务执行
-    logger, log_buffer = get_task_logger(new_task_id)
-    future = executor.submit(download_gallery_task, url, mode, new_task_id, logger)
-
-    # 更新内存中的任务信息
-    with tasks_lock:
-        tasks[new_task_id] = TaskInfo(future, logger, log_buffer)
-
-    return json_response({'message': f'Task retry started with new ID {new_task_id}', 'task_id': new_task_id}), 202
-
-
-@app.route('/api/task_log/<task_id>')
-def get_task_log(task_id):
-    with tasks_lock:
-        task = tasks.get(task_id)
-    if not task:
-        return json_response({'error': 'Task not found'}), 404
-    log_content = task.log_buffer.getvalue()
-    return json_response({'log': log_content})
-
-@app.route('/api/task/<task_id>')
-def get_task(task_id):
-    # 首先检查内存中的任务
-    with tasks_lock:
-        memory_task = tasks.get(task_id)
-        if memory_task:
-            task_data = {
-                'id': task_id,
-                'status': memory_task.status,
-                'error': memory_task.error,
-                'filename': memory_task.filename,
-                'progress': memory_task.progress,
-                'downloaded': memory_task.downloaded,
-                'total_size': memory_task.total_size,
-                'speed': memory_task.speed,
-                'log': memory_task.log_buffer.getvalue()
-            }
-            return json_response(task_data)
-
-    # 如果内存中没有，检查数据库
-    db_task = task_db.get_task(task_id)
-    if db_task:
-        return json_response(db_task)
-
-    return json_response({'error': 'Task not found'}), 404
-
-@app.route('/api/config', methods=['GET'])
-def get_config():
-    config_data = load_config()
-
-    # 添加状态信息
-    config_data['status'] = {
-        'eh_valid': app.config.get('EH_VALID', False),
-        'exh_valid': app.config.get('EXH_VALID', False),
-        'nh_toggle': app.config.get('NH_TOGGLE', False),
-        'hd_toggle': app.config.get('HD_TOGGLE', False),
-        'aria2_toggle': app.config.get('ARIA2_TOGGLE', False),
-        'komga_toggle': app.config.get('KOMGA_TOGGLE', False),
-        'notification_toggle': notification_process is not None and notification_process.poll() is None,
-        'notification_pid': notification_process.pid if notification_process and notification_process.poll() is None else None,
-        'eh_funds': app.config.get('EH_FUNDS', {'GP': '-', 'Credits': '-'})
-    }
-    return json_response(config_data)
-
-@app.route('/api/config', methods=['POST'])
-def update_config():
-    data = request.get_json()
-    source = request.args.get('source')
-
-    if not data:
-        return json_response({'error': 'Invalid JSON data'}), 400
-
-    try:
-        save_config(data)
-    except Exception as e:
-        return json_response({'error': f'Failed to save config: {e}'}), 500
-
-    if source == 'notification':
-        # 只更新通知相关的配置，不触发完整的 check_config
-        notification_config = data.get('notification', {})
-        is_any_notifier_enabled = any(
-            details.get('enable') for name, details in notification_config.items()
-        )
-        notification_config['enable'] = is_any_notifier_enabled
-        app.config['NOTIFICATION'] = notification_config
-
-        global_logger.info("Notification config updated without triggering a full service check.")
-        
-        # 可能需要重启通知子进程以应用更改
-        if app.config.get('KOMGA_TOGGLE'):
-            global_logger.info("Restarting notification listener to apply changes...")
-            stop_notification_process()
-            start_notification_process()
-        return json_response({'message': 'Notification config updated successfully'}), 200
-    else:
-        # 原始的完整更新流程
-        app.config['CHECKING_CONFIG'] = True
-        executor.submit(check_config)
-        return json_response({'message': 'Config updated successfully', 'status_check_started': True}), 200
-
-@app.route('/api/tasks', methods=['GET'])
-def get_tasks():
-    status_filter = request.args.get('status')
-    page = int(request.args.get('page', 1))
-    page_size = int(request.args.get('page_size', 20))
-
-    # 从数据库获取任务列表
-    db_tasks, total = task_db.get_tasks(status_filter, page, page_size)
-
-    # 合并内存中的活跃任务信息
-    with tasks_lock:
-        for db_task in db_tasks:
-            task_id = db_task['id']
-            if task_id in tasks:
-                memory_task = tasks[task_id]
-                # 用内存中的最新信息更新数据库任务
-                db_task.update({
-                    'status': memory_task.status,
-                    'error': memory_task.error,
-                    'log': memory_task.log_buffer.getvalue(),
-                    'filename': memory_task.filename,
-                    'progress': memory_task.progress,
-                    'downloaded': memory_task.downloaded,
-                    'total_size': memory_task.total_size,
-                    'speed': memory_task.speed
-                })
-
-                # 同步更新数据库
-                task_db.update_task(
-                    task_id,
-                    status=memory_task.status,
-                    error=memory_task.error,
-                    log=memory_task.log_buffer.getvalue(),
-                    filename=memory_task.filename,
-                    progress=memory_task.progress,
-                    downloaded=memory_task.downloaded,
-                    total_size=memory_task.total_size,
-                    speed=memory_task.speed
-                )
-
-    # 按任务ID降序排序（任务ID基于时间，新的ID更大）
-    db_tasks.sort(key=lambda x: x.get('id', ''), reverse=True)
-
-    # 获取各个状态的任务数量统计
-    try:
-        with sqlite3.connect('./data/tasks.db') as conn:
-            conn.row_factory = sqlite3.Row
-            cursor = conn.execute('''
-                SELECT
-                    status,
-                    COUNT(*) as count
-                FROM tasks
-                GROUP BY status
-            ''')
-            status_counts = {row['status']: row['count'] for row in cursor.fetchall()}
-
-            # 获取各个状态的总数
-            all_count = sum(status_counts.values())
-            in_progress_count = status_counts.get(TaskStatus.IN_PROGRESS, 0)
-            completed_count = status_counts.get(TaskStatus.COMPLETED, 0)
-            cancelled_count = status_counts.get(TaskStatus.CANCELLED, 0)
-            failed_count = status_counts.get(TaskStatus.ERROR, 0)
-    except sqlite3.Error as e:
-        print(f"Database error getting status counts: {e}")
-        all_count = total
-        in_progress_count = 0
-        completed_count = 0
-        cancelled_count = 0
-        failed_count = 0
-
-    return json_response({
-        'tasks': db_tasks,
-        'total': total,
-        'page': page,
-        'page_size': page_size,
-        'total_pages': (total + page_size - 1) // page_size,
-        'status_counts': {
-            'all': all_count,
-            'in-progress': in_progress_count,
-            'completed': completed_count,
-            'cancelled': cancelled_count,
-            'failed': failed_count
-        }
-    })
-
-@app.route('/api/task_stats', methods=['GET'])
-def get_task_stats():
-    """获取任务统计信息"""
-    try:
-        with sqlite3.connect('./data/tasks.db') as conn:
-            conn.row_factory = sqlite3.Row
-            # 获取各种状态的任务数量
-            cursor = conn.execute('''
-                SELECT
-                    status,
-                    COUNT(*) as count
-                FROM tasks
-                GROUP BY status
-            ''')
-            status_counts = {row['status']: row['count'] for row in cursor.fetchall()}
-
-            # 获取总任务数
-            cursor = conn.execute('SELECT COUNT(*) as total FROM tasks')
-            total_tasks = cursor.fetchone()['total']
-
-            # 获取进行中任务数
-            in_progress = status_counts.get(TaskStatus.IN_PROGRESS, 0)
-
-            # 获取已完成任务数
-            completed = status_counts.get(TaskStatus.COMPLETED, 0)
-
-            # 获取取消任务数
-            cancelled = status_counts.get(TaskStatus.CANCELLED, 0)
-
-            # 获取失败任务数（只包括错误）
-            failed = status_counts.get(TaskStatus.ERROR, 0)
-
-            return json_response({
-                'total': total_tasks,
-                'in_progress': in_progress,
-                'completed': completed,
-                'cancelled': cancelled,
-                'failed': failed,
-                'status_counts': status_counts
-            })
-
-    except sqlite3.Error as e:
-        print(f"Database error getting task stats: {e}")
-        return json_response({'error': 'Failed to get task statistics'}), 500
-
-@app.route('/api/clear_tasks', methods=['POST'])
-def clear_tasks():
-    status_to_clear = request.args.get('status')
-    if not status_to_clear:
-        return json_response({'error': 'No status provided to clear'}), 400
-
-    # 从数据库清除任务
-    success = task_db.clear_tasks(status_to_clear)
-    if not success:
-        return json_response({'error': 'Failed to clear tasks from database'}), 500
-
-    # 同时从内存清除对应任务
-    with tasks_lock:
-        tasks_to_keep = {}
-        for tid, task_info in tasks.items():
-            should_clear = False
-            
-            if status_to_clear == "all_except_in_progress":
-                # 清除除了进行中任务外的所有任务
-                should_clear = task_info.status != TaskStatus.IN_PROGRESS
-            elif status_to_clear == "failed":
-                # 清除失败状态的任务（对应数据库中的"错误"状态）
-                should_clear = task_info.status == TaskStatus.ERROR
-            elif status_to_clear == "completed":
-                # 清除已完成的任务
-                should_clear = task_info.status == TaskStatus.COMPLETED
-            elif status_to_clear == "cancelled":
-                # 清除取消的任务
-                should_clear = task_info.status == TaskStatus.CANCELLED
-            elif status_to_clear == "in-progress":
-                # 清除进行中的任务
-                should_clear = task_info.status == TaskStatus.IN_PROGRESS
-            else:
-                # 直接状态匹配
-                should_clear = task_info.status == status_to_clear
-            
-            if should_clear:
-                # 清除日志缓冲区
-                if hasattr(task_info, 'log_buffer'):
-                    task_info.log_buffer.close()
-            else:
-                tasks_to_keep[tid] = task_info
-                
-        tasks.clear()
-        tasks.update(tasks_to_keep)
-
-    return json_response({'message': f'Tasks with status "{status_to_clear}" cleared successfully'}), 200
-
-@app.route('/api/internal/favorite', methods=['POST'])
-def handle_internal_favorite():
-    """处理来自 notification.py 的内部 Komga 事件，用于收藏夹同步"""
-    data = request.get_json()
-    if not data or 'event' not in data:
-        return json_response({'error': 'No event type provided'}), 400
-
-    event_type = data.get('event')
-    event_data = data.get('data', {})
-
-    if event_type == 'komga.new':
-        return handle_favorite_downloaded(event_data)
-    elif event_type == 'komga.delete':
-        return handle_favorite_deleted(event_data)
-    else:
-        return json_response({'error': f"Unknown event type for internal favorite sync: {event_type}"}), 400
-
-def handle_favorite_downloaded(data):
-    """处理收藏夹项目已下载的逻辑 (komga.new)"""
-    gallery_url = None
-    links = data.get('metadata', {}).get('links', [])
-    for link in links:
-        if link.get('label') in ('e-hentai.org', 'exhentai.org', 'E-Hentai'):
-            gallery_url = link.get('url')
-            break
-    
-    if not gallery_url:
-        return json_response({'error': "E-Hentai/ExHentai URL not found in Komga metadata"}), 404
-
-    gid, _ = parse_gallery_url(gallery_url)
-    if not gid:
-        return json_response({'error': f"Could not parse gid/token from URL: {gallery_url}"}), 400
-
-    komga_book_id = data.get('id')
-    if not komga_book_id:
-        success = task_db.mark_favorite_as_downloaded(gid)
-        if success:
-            global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已下载 (Komga Book ID 未提供)。")
-            return json_response({'message': f'Favorite (gid: {gid}) marked as downloaded.'}), 200
-        else:
-            return json_response({'message': 'Favorite not found or already marked as downloaded.'}), 404
-
-    # 从 Komga metadata 中获取标题
-    komga_title = data.get('metadata', {}).get('title', '')
-    
-    success = task_db.update_favorite_komga_id(gid, komga_book_id, komga_title)
-    if success:
-        global_logger.info(f"成功将收藏夹项目 (gid: {gid}) 标记为已同步到 Komga (Book ID: {komga_book_id}, Title: {komga_title})。")
-        return json_response({'message': f'Favorite (gid: {gid}) marked as synced with Komga book ID {komga_book_id}.'}), 200
-    else:
-        return json_response({'message': 'Favorite not found or failed to mark as synced.'}), 404
-
-def handle_favorite_deleted(data):
-    """处理收藏夹项目被删除的逻辑 (komga.delete)"""
-    komga_book_id = data.get('id')
-    if not komga_book_id:
-        return json_response({'error': 'No book_id (id) provided for deletion event'}), 400
-
-    favorite = task_db.get_favorite_by_komga_id(komga_book_id)
-    if not favorite:
-        global_logger.info(f"未找到与 Komga Book ID {komga_book_id} 关联的收藏夹记录，无需操作。")
-        return json_response({'message': 'No favorite record found for this Komga book ID.'}), 200
-
-    gid = favorite.get('gid')
-    if not gid:
-        return json_response({'error': 'Favorite record is missing gid.'}), 500
-        
-    eh_tools = app.config.get('EH_TOOLS')
-    if not eh_tools:
-        return json_response({'error': 'E-Hentai tools not initialized'}), 500
-
-    delete_success = eh_tools.delete_from_favorites(str(gid))
-    if delete_success:
-        global_logger.info(f"成功从线上收藏夹删除 gid: {gid}。")
-        task_db.delete_eh_favorites_by_gids([gid])
-        global_logger.info(f"成功从本地数据库删除收藏夹记录 gid: {gid}。")
-        return json_response({'message': f'Successfully deleted favorite (gid: {gid}) online and locally.'}), 200
-    else:
-        global_logger.error(f"从线上收藏夹删除 gid: {gid} 失败。")
-        return json_response({'error': f'Failed to delete favorite (gid: {gid}) from online favorites.'}), 500
-
-@app.route('/api/ehentai/favorites/categories', methods=['GET'])
-def get_ehentai_favcats():
-    """获取 E-Hentai 收藏夹分类列表"""
-    if 'EH_TOOLS' in app.config:
-        eh_tools = app.config['EH_TOOLS']
-        favcat_list = eh_tools.get_favcat_list()
-        
-        if not favcat_list and app.config.get('EH_FAV_SYNC_ENABLED'):
-             return json_response({'message': '正在获取收藏夹列表, 请刷新页面重试。'}), 202
-
-        return json_response(favcat_list)
-    else:
-        return json_response({'error': 'E-Hentai tools not initialized'}), 500
-
-@app.route('/api/ehentai/favorites/sync', methods=['GET'])
-def trigger_sync_favorites():
-    """
-    从线上同步 E-Hentai 收藏夹到本地数据库
-    参数: download=true/false (可选，是否同步后自动下载)
-    """
-    try:
-        if not app.config.get('EH_FAV_SYNC_ENABLED'):
-            return json_response({'error': 'E-Hentai 收藏夹同步功能未启用'}), 400
-        
-        # 获取 download 参数
-        download_param = request.args.get('download', '').lower()
-        if download_param in ('true', 't', '1', 'y', 'yes'):
-            auto_download = True
-        elif download_param in ('false', 'f', '0', 'n', 'no'):
-            auto_download = False
-        else:
-            # 未指定则使用 None，让 sync_eh_favorites_job 使用配置值
-            auto_download = None
-        
-        from scheduler import sync_eh_favorites_job
-        executor.submit(sync_eh_favorites_job, auto_download)
-        
-        download_status = auto_download if auto_download is not None else app.config.get('EH_FAV_AUTO_DOWNLOAD', False)
-        global_logger.info(f"手动触发 E-Hentai 收藏夹同步任务 (自动下载: {download_status})")
-        return json_response({
-            'message': 'E-Hentai 收藏夹同步任务已启动',
-            'auto_download': download_status
-        }), 202
-            
-    except Exception as e:
-        global_logger.error(f"触发 E-Hentai 收藏夹同步任务失败: {e}")
-        return json_response({'error': f'触发同步任务失败: {str(e)}'}), 500
-
-@app.route('/api/ehentai/refresh', methods=['GET'])
-def refresh_ehentai_cookie():
-    """
-    验证 E-Hentai cookie 的有效性并更新资金信息
-    返回验证状态、资金信息以及更新的 sk 和 igneous cookie
-    """
-    try:
-        ehentai_tool = app.config.get('EH_TOOLS')
-        if not ehentai_tool:
-            global_logger.warning("EH_TOOLS 未初始化，无法验证 Cookie")
-            return json_response({
-                'error': 'E-Hentai tools not initialized'
-            }), 500
-        
-        # 验证 cookie
-        eh_valid, exh_valid, eh_funds = ehentai_tool.is_valid_cookie()
-        
-        # 更新 E-Hentai 和 ExHentai 验证状态
-        app.config['EH_VALID'] = eh_valid
-        app.config['EXH_VALID'] = exh_valid
-        
-        # 获取更新后的临时 cookies
-        cached_cookies = ehentai_tool.get_cached_cookies()
-        
-        if eh_valid or exh_valid:
-            # 更新资金信息
-            update_eh_funds(eh_funds)
-            global_logger.info(f"E-Hentai Cookie 验证成功 (EH: {eh_valid}, ExH: {exh_valid})")
-            
-            return json_response({
-                'status': 'success',
-                'eh_valid': eh_valid,
-                'exh_valid': exh_valid,
-                'funds': eh_funds,
-                'sk': cached_cookies.get('sk'),
-                'igneous': cached_cookies.get('igneous'),
-                'message': 'Cookie 验证成功'
-            }), 200
-        else:
-            global_logger.warning("E-Hentai Cookie 验证失败")
-            return json_response({
-                'status': 'failed',
-                'eh_valid': False,
-                'exh_valid': False,
-                'funds': {'GP': '-', 'Credits': '-'},
-                'sk': None,
-                'igneous': None,
-                'message': 'Cookie 验证失败，请检查配置'
-            }), 200
-            
-    except Exception as e:
-        global_logger.error(f"验证 E-Hentai Cookie 时发生错误: {e}")
-        return json_response({
-            'error': f'验证 Cookie 时发生错误: {str(e)}'
-        }), 500
-
-@app.route('/api/ehentai/test_status', methods=['POST'])
-def test_ehentai_status():
-    """
-    测试接口：临时设置 E-Hentai 状态用于前端测试
-    参数: eh_valid (bool), exh_valid (bool)
-    例如: POST /api/ehentai/test_status?eh_valid=false&exh_valid=false
-    """
-    try:
-        eh_valid_param = request.args.get('eh_valid', '').lower()
-        exh_valid_param = request.args.get('exh_valid', '').lower()
-
-        # 解析布尔值
-        def parse_bool(value):
-            if value in ('true', 't', '1', 'y', 'yes'):
-                return True
-            elif value in ('false', 'f', '0', 'n', 'no'):
-                return False
-            elif value in ('null', 'none', ''):
-                return None
-            return None
-
-        eh_valid = parse_bool(eh_valid_param)
-        exh_valid = parse_bool(exh_valid_param)
-
-        # 更新状态
-        app.config['EH_VALID'] = eh_valid
-        app.config['EXH_VALID'] = exh_valid
-
-        global_logger.info(f"测试模式：设置 E-Hentai 状态为 EH_VALID={eh_valid}, EXH_VALID={exh_valid}")
-
-        return json_response({
-            'message': '测试状态已设置',
-            'eh_valid': eh_valid,
-            'exh_valid': exh_valid,
-            'status_text': '正常' if exh_valid else ('异常' if (eh_valid is None and exh_valid is None) else '受限')
-        }), 200
-
-    except Exception as e:
-        global_logger.error(f"设置测试状态失败: {e}")
-        return json_response({'error': f'设置测试状态失败: {str(e)}'}), 500
-
-@app.route('/api/hdoujin/refresh', methods=['POST'])
-def refresh_hdoujin_token():
-    """
-    更新 HDoujin token 配置
-    从前端接收新的 clearance、refresh_token 和 user_agent，并更新配置
-    """
-    try:
-        data = request.get_json()
-        if not data:
-            return json_response({'error': 'No JSON data provided'}), 400
-
-        clearance = data.get('clearance')
-        refresh_token = data.get('refresh_token')
-        user_agent = data.get('user_agent')
-
-        if not clearance and not refresh_token and not user_agent:
-            return json_response({'error': 'No clearance, refresh_token or user_agent provided'}), 400
-
-        # 更新配置
-        config_data = load_config()
-        hdoujin_config = config_data.get('hdoujin', {})
-
-        updated = False
-        if clearance and clearance != hdoujin_config.get('clearance_token'):
-            hdoujin_config['clearance_token'] = clearance
-            updated = True
-
-        if refresh_token and refresh_token != hdoujin_config.get('refresh_token'):
-            hdoujin_config['refresh_token'] = refresh_token
-            updated = True
-
-        if user_agent and user_agent != hdoujin_config.get('user_agent'):
-            hdoujin_config['user_agent'] = user_agent
-            updated = True
-
-        if updated:
-            config_data['hdoujin'] = hdoujin_config
-            save_config(config_data)
-
-            # 重新初始化 HDoujin 工具
-            hd = hdoujin.HDoujinTools(
-                session_token=hdoujin_config.get('session_token', ''),
-                refresh_token=hdoujin_config.get('refresh_token', ''),
-                clearance_token=hdoujin_config.get('clearance_token', ''),
-                user_agent=hdoujin_config.get('user_agent', ''),
-                logger=global_logger
-            )
-            app.config['HD_TOOLS'] = hd
-
-            # 验证更新后的 token
-            hd_toggle = hd.is_valid_cookie()
-            app.config['HD_TOGGLE'] = hd_toggle
-
-            global_logger.info("成功更新 HDoujin tokens 和 User-Agent")
-            return json_response({
-                'success': True,
-                'message': '成功更新 HDoujin tokens 和 User-Agent',
-                'hd_valid': hd_toggle
-            }), 200
-        else:
-            return json_response({
-                'success': False,
-                'message': '未检测到 tokens 或 User-Agent 的变化'
-            }), 200
-
-    except Exception as e:
-        global_logger.error(f"更新 HDoujin Token 时发生错误: {e}")
-        return json_response({
-            'error': f'更新 Token 时发生错误: {str(e)}'
-        }), 500
-
-@app.route('/api/ehentai/favorites/addfav', methods=['POST'])
-def add_favorite():
-    """
-    将画廊添加到 E-Hentai 收藏夹
-    
-    请求体格式:
-    {
-        "gid": 123456,
-        "token": "abc123def456",
-        "favcat": "0",
-        "note": "备注信息（可选）"
-    }
-    """
-    try:
-        try:
-            data = request.get_json()
-        except (ValueError, TypeError):
-            return json_response({'error': '请提供有效的 JSON 数据'}), 400
-        
-        if not data:
-            return json_response({'error': '请提供 JSON 数据'}), 400
-        
-        gid = data.get('gid')
-        token = data.get('token')
-        favcat = data.get('favcat', '0')  # 默认收藏夹
-        note = data.get('note', '')      # 备注，可选
-        
-        if not gid or not token:
-            return json_response({'error': '缺少必要参数：gid 和 token'}), 400
-        
-        # 获取 E-Hentai 工具实例
-        eh_tools = app.config.get('EH_TOOLS')
-        if not eh_tools:
-            return json_response({'error': 'E-Hentai 工具未初始化'}), 500
-        
-        # 调用 add_to_favorites 方法
-        success = eh_tools.add_to_favorites(
-            gid=int(gid), 
-            token=token, 
-            favcat=str(favcat), 
-            note=note
-        )
-        
-        if success:
-            global_logger.info(f"成功将画廊 (gid: {gid}) 添加到收藏夹 (favcat: {favcat})")
-            return json_response({
-                'message': f'成功将画廊添加到收藏夹',
-                'gid': gid,
-                'favcat': favcat,
-                'success': True
-            }), 200
-        else:
-            global_logger.warning(f"将画廊 (gid: {gid}) 添加到收藏夹失败")
-            return json_response({
-                'error': '将画廊添加到收藏夹失败',
-                'gid': gid,
-                'favcat': favcat,
-                'success': False
-            }), 500
-            
-    except ValueError as e:
-        global_logger.error(f"参数格式错误: {e}")
-        return json_response({'error': f'参数格式错误: {str(e)}'}), 400
-    except Exception as e:
-        global_logger.error(f"添加收藏夹时发生错误: {e}")
-        return json_response({'error': f'添加收藏夹时发生错误: {str(e)}'}), 500
-
-@app.route('/api/ehentai/favorites/fetch', methods=['GET'])
-def fetch_undownloaded_favorites():
-    """下载本地数据库中所有未下载的收藏"""
-    try:
-        from scheduler import trigger_undownloaded_favorites_download
-        
-        global_logger.info("手动触发未下载收藏的下载任务")
-        success_count, failed_count, total_count = trigger_undownloaded_favorites_download(logger=global_logger)
-        
-        if total_count == 0:
-            return json_response({'message': '没有需要下载的收藏项目'}), 200
-        
-        return json_response({
-            'message': f'已触发 {success_count} 个下载任务',
-            'success': success_count,
-            'failed': failed_count,
-            'total': total_count
-        }), 202
-        
-    except Exception as e:
-        global_logger.error(f"触发未下载收藏下载任务失败: {e}")
-        return json_response({'error': f'触发下载任务失败: {str(e)}'}), 500
-
-# Catch-all 路由，用于服务 Vue.js 的 index.html
 # 确保这个路由在所有 API 路由之后定义
 @app.route('/', defaults={'path': ''})
 @app.route('/<path:path>')
@@ -1865,7 +1158,25 @@ if __name__ == '__main__':
     migrate_ini_to_yaml()
     # 初始化时加载配置，确保端口号等信息在两个进程中都可用
     check_config()
-    
+
+    # 在配置初始化后注册 Blueprint（确保 EH_TOOLS 等依赖已准备就绪）
+    # 将 global_logger、tasks、tasks_lock 和 executor 放入 app.config
+    # 确保在多进程环境下所有代码访问的是同一个实例
+    app.config['GLOBAL_LOGGER'] = global_logger
+    app.config['TASKS'] = tasks
+    app.config['TASKS_LOCK'] = tasks_lock
+    app.config['EXECUTOR'] = executor
+    # 将函数和类放入 app.config 供 Blueprint 使用
+    app.config['GET_TASK_LOGGER'] = get_task_logger
+    app.config['TASK_FAILURE_PROCESSING'] = task_failure_processing
+    app.config['DOWNLOAD_GALLERY_TASK'] = download_gallery_task
+    app.config['TASK_INFO_CLASS'] = TaskInfo
+    app.register_blueprint(ehentai_bp)
+    app.register_blueprint(task_bp)
+    app.register_blueprint(config_bp)
+    app.register_blueprint(hdoujin_bp)
+    app.register_blueprint(download_bp)
+
     
     # 仅在主工作进程中执行一次性初始化，以避免 reloader 重复执行
     if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true':

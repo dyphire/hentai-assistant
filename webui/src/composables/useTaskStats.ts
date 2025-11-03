@@ -19,7 +19,7 @@ export function useTaskStats() {
     loading.value = true
     error.value = null
     try {
-      const response = await axios.get('/api/task_stats')
+      const response = await axios.get('/api/tasks/stats')
       stats.value = response.data
     } catch (err) {
       error.value = '获取任务统计信息失败'

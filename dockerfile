@@ -17,8 +17,8 @@ RUN npm ci && npm cache clean --force
 COPY webui/ ./
 
 # 构建生产版本
-RUN npm run build && \
-    npm prune --production
+# 优化：移除多余的 npm prune 命令
+RUN npm run build
 
 # 阶段2: 构建 Python 后端
 FROM python:3.11-slim-bookworm AS python-builder
@@ -45,8 +45,8 @@ WORKDIR /app
 
 # 预编译依赖
 COPY requirements.txt .
-RUN pip install --upgrade pip && \
-    pip wheel --no-cache-dir --wheel-dir=/app/wheels -r requirements.txt
+# 优化：移除多余的 pip upgrade 命令，直接使用预装的 pip
+RUN pip wheel --no-cache-dir --wheel-dir=/app/wheels -r requirements.txt
 
 # 阶段3: 最终镜像
 FROM python:3.11-slim-bookworm AS backend
@@ -74,8 +74,8 @@ RUN groupadd -g 1000 appuser && useradd -u 1000 -g appuser -r appuser
 # 安装Python依赖
 COPY --from=python-builder /app/wheels /wheels
 COPY requirements.txt .
-RUN pip install --no-cache-dir --upgrade pip && \
-    pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt && \
+# 优化：移除多余的 pip upgrade 命令，直接从 wheels 安装
+RUN pip install --no-cache-dir --no-index --find-links=/wheels -r requirements.txt && \
     rm -rf /wheels
 
 # 复制应用代码

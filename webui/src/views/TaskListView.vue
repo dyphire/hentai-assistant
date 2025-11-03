@@ -650,7 +650,7 @@ const showCopyModal = (content: string) => {
 const stopTask = async (taskId: string) => {
   stoppingTasks.value[taskId] = true;
   try {
-    await axios.post(`${API_BASE_URL}/stop_task/${taskId}`);
+    await axios.post(`${API_BASE_URL}/tasks/${taskId}/cancel`);
     // 任务停止后，刷新列表
     await fetchTasks(false);
   } catch (err: any) {
@@ -666,7 +666,7 @@ const retryTask = async (taskId: string) => {
 
   try {
     // 发送重试请求到后端
-    const response = await axios.post(`${API_BASE_URL}/retry_task/${taskId}`);
+    const response = await axios.post(`${API_BASE_URL}/tasks/${taskId}/retry`);
 
     showNotification('任务重试已启动', 'success');
 
@@ -909,7 +909,7 @@ const confirmClearTasks = async () => {
 const clearTasks = async (status: string) => {
   clearing.value = true;
   try {
-    await axios.post(`${API_BASE_URL}/clear_tasks?status=${status}`);
+    await axios.post(`${API_BASE_URL}/tasks/clear?status=${status}`);
     // 清除成功后重置到第一页并刷新任务列表
     pagination.value.page = 1;
     await fetchTasks(false);
