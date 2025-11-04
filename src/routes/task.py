@@ -195,6 +195,34 @@ def cancel_task(task_id):
         # 设置取消标志
         task.cancelled = True
 
+        # 检查任务是否正在使用 Aria2 下载
+        aria2_gid = None
+        with tasks_lock:
+            if task.aria2_gid:
+                aria2_gid = task.aria2_gid
+                if global_logger:
+                    global_logger.info(f"检测到任务 {task_id} 正在使用 Aria2 下载 (gid: {aria2_gid})，尝试取消 Aria2 任务")
+
+        # 如果任务正在使用 Aria2，主动发送取消指令
+        if aria2_gid:
+            try:
+                from providers import aria2
+                aria2_server = current_app.config.get('ARIA2_SERVER')
+                aria2_token = current_app.config.get('ARIA2_TOKEN')
+                
+                if aria2_server and aria2_token:
+                    # 按需创建 Aria2RPC 实例
+                    rpc = aria2.Aria2RPC(url=aria2_server, token=aria2_token, logger=global_logger)
+                    remove_result = rpc.remove(aria2_gid)
+                    if global_logger:
+                        if remove_result.get('result'):
+                            global_logger.info(f"成功向 Aria2 发送取消指令 (gid: {aria2_gid})")
+                        else:
+                            global_logger.warning(f"Aria2 取消指令可能失败: {remove_result}")
+            except Exception as e:
+                if global_logger:
+                    global_logger.warning(f"向 Aria2 发送取消指令时出错: {e}")
+
         cancelled = task.future.cancel()
         if cancelled:
             with tasks_lock:
@@ -205,7 +233,12 @@ def cancel_task(task_id):
                 global_logger.info(f"Task {task_id} cancelled successfully")
             return json_response({'message': 'Task cancelled'})
         else:
-            return json_response({'message': 'Task could not be cancelled (可能已在运行或已完成)'}), 200
+            # 即使 future.cancel() 返回 False（任务已在运行），
+            # 取消标志已设置，且 Aria2 任务（如果有）已被取消
+            # 任务会在下一个检查点自然终止
+            if global_logger:
+                global_logger.info(f"Task {task_id} is running, cancel flag set, will stop at next checkpoint")
+            return json_response({'message': 'Task cancel requested (任务正在运行，将在检查点处停止)'}), 200
 
     except Exception as e:
         if global_logger:
@@ -237,23 +270,24 @@ def retry_task(task_id):
         if not task_info:
             return json_response({'error': 'Task not found'}), 404
 
-        # 检查任务状态是否为失败
-        if task_info['status'] != TaskStatus.ERROR:
-            return json_response({'error': 'Only failed tasks can be retried'}), 400
+        # 检查任务状态是否为失败或取消
+        if task_info['status'] not in (TaskStatus.ERROR, TaskStatus.CANCELLED):
+            return json_response({'error': 'Only failed or cancelled tasks can be retried'}), 400
 
         # 检查是否有URL信息
         if not task_info.get('url'):
             return json_response({'error': 'Task URL information is missing, cannot retry'}), 400
 
-        # 获取URL和mode
+        # 获取URL、mode和favcat
         url = task_info['url']
         mode = task_info.get('mode')
+        favcat = task_info.get('favcat')  # 可能是 None、字符串 '0'-'9'
 
         # 创建新的任务ID
         new_task_id = datetime.now(timezone.utc).strftime('%y%m%d%H%M%S%f')
 
         # 添加新任务到数据库
-        task_db.add_task(new_task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode)
+        task_db.add_task(new_task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode, favcat=favcat)
 
         # 删除原来的失败任务
         try:
@@ -275,12 +309,28 @@ def retry_task(task_id):
                 del tasks[task_id]
 
         # 创建新的任务执行
+        # 将 favcat 从字符串转换回原始格式（'0'-'9' 或 False）
+        if favcat and favcat.isdigit():
+            favcat_param = favcat  # 保持为字符串 '0'-'9'
+        else:
+            favcat_param = False
+        
         logger, log_buffer = main.get_task_logger(new_task_id)
-        future = executor.submit(main.download_gallery_task, url, mode, new_task_id, logger)
+        
+        # 从 current_app.config 获取函数和类
+        get_task_logger = current_app.config.get('GET_TASK_LOGGER')
+        task_failure_processing = current_app.config.get('TASK_FAILURE_PROCESSING')
+        download_gallery_task = current_app.config.get('DOWNLOAD_GALLERY_TASK')
+        TaskInfo = current_app.config.get('TASK_INFO_CLASS')
+        
+        # 动态应用装饰器
+        decorated_download_task = task_failure_processing(url, new_task_id, logger, tasks, tasks_lock)(download_gallery_task)
+        
+        future = executor.submit(decorated_download_task, url, mode, new_task_id, logger, favcat_param, tasks, tasks_lock)
 
         # 更新内存中的任务信息
         with tasks_lock:
-            tasks[new_task_id] = main.TaskInfo(future, logger, log_buffer)
+            tasks[new_task_id] = TaskInfo(future, logger, log_buffer)
 
         if global_logger:
             global_logger.info(f"Task retry started with new ID {new_task_id}")

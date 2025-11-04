@@ -81,8 +81,10 @@ def download_url():
         with tasks_lock:
             tasks[task_id] = TaskInfo(future, logger, log_buffer)
 
-        # 添加任务到数据库，包含URL和mode信息用于重试
-        task_db.add_task(task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode)
+        # 添加任务到数据库，包含URL、mode和favcat信息用于重试
+        # 将 favcat 转换为字符串存储（False -> None）
+        favcat_to_save = str(favcat) if favcat is not False else None
+        task_db.add_task(task_id, status=TaskStatus.IN_PROGRESS, url=url, mode=mode, favcat=favcat_to_save)
 
         return json_response({
             'message': f"Download task for {url} started with task ID {task_id}.",

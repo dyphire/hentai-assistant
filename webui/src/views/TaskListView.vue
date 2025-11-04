@@ -129,7 +129,7 @@
                 {{ expandedLogs[task.id] ? '隐藏日志' : '查看日志' }}
               </button>
               <button
-                v-if="task.status === '错误'"
+                v-if="task.status === '错误' || task.status === '取消'"
                 @click="retryTask(task.id)"
                 :disabled="retryingTasks[task.id]"
                 class="retry-button"

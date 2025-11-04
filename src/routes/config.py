@@ -64,20 +64,6 @@ def get_config():
                 config_data['status']['notification_pid'] = None
                 config_data['status']['notification_status'] = 'not_started'
 
-            # 调试日志
-            if global_logger:
-                global_logger.info(
-                    f"[get_config] Komga status check - "
-                    f"toggle: {config_data['status']['komga_toggle']}, "
-                    f"has_external: {has_external_notifier}, "
-                    f"should_start: {should_start_notification}, "
-                    f"running: {notification_running}, "
-                    f"pid: {notification_pid}, "
-                    f"status: {config_data['status']['notification_status']}, "
-                    f"current_app.config['KOMGA_TOGGLE']: {current_app.config.get('KOMGA_TOGGLE')}, "
-                    f"id(current_app): {id(current_app)}, "
-                    f"id(current_app.config): {id(current_app.config)}"
-                )
         except Exception as e:
             if global_logger:
                 global_logger.error(f"Failed to get notification process info: {e}")

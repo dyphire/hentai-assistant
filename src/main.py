@@ -140,6 +140,7 @@ class TaskInfo:
         self.total_size = 0  # 总字节数
         self.speed = 0  # 下载速度 B/s
         self.cancelled = False  # 取消标志
+        self.aria2_gid = None  # Aria2 下载任务的 gid
 
 class SafeDict(dict):
     def __missing__(self, key):
@@ -410,9 +411,6 @@ def check_config(app_instance=None):
     app_instance.config['ARIA2_TOGGLE'] = aria2_toggle
     app_instance.config['KOMGA_TOGGLE'] = komga_toggle
     app_instance.config['CHECKING_CONFIG'] = False
-    
-    # 调试日志：确认更新
-    global_logger.info(f"[check_config] 已更新 app_instance.config['KOMGA_TOGGLE'] = {komga_toggle}, id(app_instance): {id(app_instance)}, id(app_instance.config): {id(app_instance.config)}")
 
     # 通知设置
     notification_config = config_data.get('notification', {})
@@ -499,14 +497,27 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
 
     gid = result['result']
 
+    # 保存 gid 到任务信息中
+    if task_id and tasks and tasks_lock:
+        with tasks_lock:
+            if task_id in tasks:
+                tasks[task_id].aria2_gid = gid
+                if logger:
+                    logger.info(f"Aria2 任务已启动，gid: {gid}")
+
     # 检查任务是否被取消
     if task_id:
         check_task_cancelled(task_id, tasks, tasks_lock)
 
     # 监视 aria2 的下载进度
     file = rpc.listen_status(gid, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
+    
+    # 下载完成或取消后，清除 gid
+    if task_id and tasks and tasks_lock:
+        with tasks_lock:
+            if task_id in tasks:
+                tasks[task_id].aria2_gid = None
     if file == None:
-        if logger: logger.info("疑似为死种, 尝试用 Arichive 的方式下载")
         return None
     else:
         filename = os.path.basename(file)
@@ -943,6 +954,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
         if result:
             if result[0] == 'torrent':
                 dl = send_to_aria2(torrent=result[1], dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
+                check_task_cancelled(task_id, tasks, tasks_lock)
                 if dl is None:
                     # 死种尝试 archive
                     if gp_value < 10 and gmetadata:
@@ -973,6 +985,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
                 if logger:
                     logger.info("找到可用的种子文件，尝试下载...")
                 dl = send_to_aria2(torrent=torrent_path, dir=app.config.get('ARIA2_DOWNLOAD_DIR'), out=filename, logger=logger, task_id=task_id, tasks=tasks, tasks_lock=tasks_lock)
+                check_task_cancelled(task_id, tasks, tasks_lock)
                 if dl:
                     if logger:
                         logger.info("通过种子下载成功")

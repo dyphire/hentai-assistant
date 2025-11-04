@@ -65,7 +65,7 @@ class TaskDatabase:
             columns = [row[1] for row in cursor.fetchall()]
 
             # 如果表已存在但缺少新字段，添加它们
-            for col in ("url", "mode"):
+            for col in ("url", "mode", "favcat"):
                 if col not in columns:
                     conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
 
@@ -99,7 +99,7 @@ class TaskDatabase:
 
     def add_task(self, task_id: str, status: str = TaskStatus.IN_PROGRESS,
                  filename: Optional[str] = None, error: Optional[str] = None,
-                 url: Optional[str] = None, mode: Optional[str] = None) -> bool:
+                 url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None) -> bool:
         """添加新任务"""
         status = self.STATUS_MAP.get(status, status)
         with self.lock:
@@ -108,9 +108,9 @@ class TaskDatabase:
                     now = datetime.now(timezone.utc).isoformat()
                     conn.execute('''
                         INSERT OR REPLACE INTO tasks
-                        (id, status, filename, error, url, mode, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (task_id, status, filename, error, url, mode, now, now))
+                        (id, status, filename, error, url, mode, favcat, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (task_id, status, filename, error, url, mode, favcat, now, now))
                     conn.commit()
                 return True
             except sqlite3.Error as e:
@@ -120,7 +120,7 @@ class TaskDatabase:
     def update_task(self, task_id: str, status: Optional[str] = None, error: Optional[str] = None,
                     log: Optional[str] = None, filename: Optional[str] = None, progress: Optional[int] = None,
                     downloaded: Optional[int] = None, total_size: Optional[int] = None, speed: Optional[int] = None,
-                    url: Optional[str] = None, mode: Optional[str] = None) -> bool:
+                    url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None) -> bool:
         """更新任务信息"""
         with self.lock:
             try:
@@ -158,6 +158,9 @@ class TaskDatabase:
                     if mode is not None:
                         updates.append("mode = ?")
                         params.append(mode)
+                    if favcat is not None:
+                        updates.append("favcat = ?")
+                        params.append(favcat)
 
                     if updates:
                         updates.append("updated_at = ?")

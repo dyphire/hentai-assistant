@@ -62,6 +62,16 @@ class Aria2RPC:
     def listen_status(self, gid, logger=None, task_id=None, tasks=None, tasks_lock=None):
         elapsed_time = 0
         elapsed_time_2 = 0
+        last_logged_progress = -1  # 上次记录的进度
+        last_log_time = 0  # 上次记录日志的时间
+
+        def format_size(bytes_value):
+            """格式化文件大小显示"""
+            for unit in ['B', 'KB', 'MB', 'GB']:
+                if bytes_value < 1024:
+                    return f"{bytes_value:.1f} {unit}"
+                bytes_value /= 1024
+            return f"{bytes_value:.1f} TB"
 
         while True:
             # 检查任务是否被取消
@@ -105,9 +115,44 @@ class Aria2RPC:
                         tasks[task_id].total_size = totallen
                         tasks[task_id].speed = download_speed
 
-            # 写入日志
-            if logger:
-                logger.info(f"Status: {status}, Progress: {progress}%, Downloaded: {completelen}/{totallen} B, Speed: {download_speed} B/s")
+            # 智能日志策略：根据进度调整日志频率
+            current_time = time.time()
+            
+            # 早期频繁打印（前10%）
+            if progress < 10:
+                log_interval = 10  # 10秒
+                progress_threshold = 2  # 2%
+            # 中期适中（10%-90%）
+            elif progress < 90:
+                log_interval = 30  # 30秒
+                progress_threshold = 5  # 5%
+            # 后期频繁（90%+）
+            else:
+                log_interval = 10  # 10秒
+                progress_threshold = 2  # 2%
+            
+            should_log = (
+                abs(progress - last_logged_progress) >= progress_threshold or
+                current_time - last_log_time >= log_interval or
+                status in ['complete', 'error', 'removed']
+            )
+            
+            if should_log and logger:
+                # 格式化速度显示
+                if download_speed >= 1024 * 1024:
+                    speed_str = f"{download_speed / (1024 * 1024):.2f} MB/s"
+                elif download_speed >= 1024:
+                    speed_str = f"{download_speed / 1024:.2f} KB/s"
+                else:
+                    speed_str = f"{download_speed} B/s"
+                
+                logger.info(
+                    f"Aria2 [{status}] {progress}% "
+                    f"({format_size(completelen)}/{format_size(totallen)}) "
+                    f"@ {speed_str}"
+                )
+                last_logged_progress = progress
+                last_log_time = current_time
 
             # 文件已完成长度达到总长度
             if completelen >= totallen and totallen > 0:
