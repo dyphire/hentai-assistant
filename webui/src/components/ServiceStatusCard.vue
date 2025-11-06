@@ -32,8 +32,10 @@
       <div class="status-item">
         <div class="service-info">
           <span class="service-name">Komga</span>
-          <span class="service-details" v-if="status.komga_toggle && !status.notification_toggle">SSE 监听器异常</span>
-          <span class="service-details" v-else-if="status.komga_toggle && status.notification_pid">SSE PID: {{ status.notification_pid }}</span>
+          <!-- 只在有外部通知器且运行时显示 PID，异常时显示异常信息 -->
+          <span class="service-details" v-if="status.notification_status === 'running' && status.notification_pid">SSE PID: {{ status.notification_pid }}</span>
+          <span class="service-details" v-else-if="status.notification_status === 'error'">SSE 监听器异常</span>
+          <!-- 其他情况不显示详细文本 -->
         </div>
         <span class="status-badge" :class="komgaStatusClass()">{{ komgaStatusText() }}</span>
       </div>
@@ -42,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import axios from 'axios';
 
 interface ConfigStatus {
@@ -53,6 +55,7 @@ interface ConfigStatus {
   komga_toggle: boolean;
   notification_toggle: boolean;
   notification_pid?: number;
+  notification_status?: 'running' | 'not_started' | 'error';
   eh_funds?: {
     GP: number | string;
     Credits: number | string;
@@ -66,6 +69,7 @@ const status = ref<ConfigStatus>({
     aria2_toggle: false,
     komga_toggle: false,
     notification_toggle: false,
+    notification_status: 'not_started',
 });
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -190,22 +194,26 @@ const hdoujinStatusText = () => {
 
 const komgaStatusClass = () => {
   if (!status.value.komga_toggle) {
+    return 'status-disabled';
+  }
+  // Komga 启用时，只有异常才是错误，其他都是正常
+  if (status.value.notification_status === 'error') {
     return 'status-error';
+  } else {
+    return 'status-success';
   }
-  if (!status.value.notification_toggle) {
-    return 'status-warning';
-  }
-  return 'status-success';
 };
 
 const komgaStatusText = () => {
   if (!status.value.komga_toggle) {
+    return '禁用';
+  }
+  // 只有异常时显示"异常"，其他情况都是"正常"
+  if (status.value.notification_status === 'error') {
     return '异常';
+  } else {
+    return '正常';
   }
-  if (!status.value.notification_toggle) {
-    return '受限';
-  }
-  return '正常';
 };
 
 onMounted(fetchStatus);
@@ -274,6 +282,10 @@ onMounted(fetchStatus);
 
 .status-warning {
   background-color: #ffcb21ff;
+}
+
+.status-disabled {
+  background-color: #6c757d;
 }
 
 .status-badge.clickable {

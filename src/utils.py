@@ -5,6 +5,7 @@ import logging
 from logging.handlers import RotatingFileHandler
 from glob import glob
 from enum import Enum
+from flask import Response
 
 class TaskStatus(str, Enum):
     IN_PROGRESS = "进行中"
@@ -18,6 +19,24 @@ class TaskStatus(str, Enum):
 
 def json_output(data):
     return json.dumps(data, indent=4, ensure_ascii=False)
+
+
+def json_response(data, status=200):
+    """
+    生成 JSON 响应
+    
+    Args:
+        data: 要返回的数据（字典或列表）
+        status: HTTP 状态码，默认 200
+    
+    Returns:
+        Flask Response 对象
+    """
+    return Response(
+        json.dumps(data, ensure_ascii=False),
+        status=status,
+        mimetype="application/json"
+    )
 
 # 检查目录是否存在
 def check_dirs(path):
