@@ -310,6 +310,106 @@ def refresh_hdoujin_token_job():
             logger.error(f"验证 HDoujin Token 时发生错误: {e}", exc_info=True)
 
 
+def check_hath_status_job():
+    """
+    定期检查 Hentai@Home 客户端状态的任务。
+    该函数将由调度器定时调用。
+    
+    注意：使用与其他 E-Hentai 功能相同的 EH_TOOLS 实例，
+    Cookie 验证由 refresh_eh_cookie_job 负责，无需重复验证。
+    """
+    with scheduler.app.app_context():
+        logger = current_app.logger
+        logger.info("定时任务触发: 开始检查 H@H 客户端状态...")
+
+        try:
+            from database import task_db
+            from notification import notify
+            
+            config = current_app.config
+            
+            # 获取共享的 EH_TOOLS 实例
+            ehentai_tool = config.get('EH_TOOLS')
+            if not ehentai_tool:
+                logger.warning("EH_TOOLS 未初始化，跳过 H@H 状态检查。")
+                return
+
+            # 获取当前客户端状态
+            # 如果 cookie 失效，get_hath_status() 会返回 None 并记录错误
+            clients = ehentai_tool.get_hath_status()
+            
+            if clients is None:
+                logger.error("获取 H@H 客户端状态失败，可能是网络错误或 Cookie 已失效")
+                logger.info("Cookie 验证将在下次 refresh_eh_cookie_job 运行时自动进行")
+                return
+            
+            if not clients:
+                logger.info("未找到任何 H@H 客户端")
+                return
+            
+            logger.info(f"成功获取 {len(clients)} 个 H@H 客户端状态")
+            
+            # 保存到数据库并检测状态变化
+            task_db.upsert_hath_status(clients)
+            
+            # 获取状态发生变化的客户端
+            changed_clients = task_db.get_hath_status_changes()
+            
+            if changed_clients:
+                logger.info(f"检测到 {len(changed_clients)} 个客户端状态发生变化")
+                
+                # 为每个状态变化的客户端发送通知
+                for client in changed_clients:
+                    client_name = client.get('client', 'Unknown')
+                    client_id = client.get('client_id', 0)
+                    current_status = client.get('status', 'Unknown')
+                    last_status = client.get('last_status')
+                    
+                    # 如果是首次检查（last_status 为 None），不发送通知
+                    if last_status is None:
+                        logger.info(f"客户端 {client_name} (ID: {client_id}) 首次记录，状态: {current_status}")
+                        continue
+                    
+                    # 判断是离线还是恢复在线
+                    if current_status == 'Online' and last_status != 'Online':
+                        # 恢复在线
+                        event = 'hath.online'
+                        logger.info(f"客户端 {client_name} (ID: {client_id}) 已恢复在线")
+                    elif current_status != 'Online' and last_status == 'Online':
+                        # 离线
+                        event = 'hath.offline'
+                        logger.warning(f"客户端 {client_name} (ID: {client_id}) 已离线，当前状态: {current_status}")
+                    else:
+                        # 其他状态变化
+                        event = 'hath.status_change'
+                        logger.info(f"客户端 {client_name} (ID: {client_id}) 状态变化: {last_status} -> {current_status}")
+                    
+                    # 发送通知
+                    notify(
+                        event=event,
+                        data={
+                            'client': client_name,
+                            'client_id': client_id,
+                            'status': current_status,
+                            'last_status': last_status,
+                            'last_seen': client.get('last_seen'),
+                            'client_ip': client.get('client_ip'),
+                            'port': client.get('port'),
+                            'version': client.get('version'),
+                            'trust': client.get('trust'),
+                            'quality': client.get('quality'),
+                            'hitrate': client.get('hitrate'),
+                            'hathrate': client.get('hathrate')
+                        },
+                        logger=logger
+                    )
+            else:
+                logger.info("所有 H@H 客户端状态正常，无变化")
+
+        except Exception as e:
+            logger.error(f"检查 H@H 客户端状态时发生错误: {e}", exc_info=True)
+
+
 def update_scheduler_jobs(app):
     """
     根据当前应用配置更新调度器中的任务。
@@ -374,6 +474,28 @@ def update_scheduler_jobs(app):
             misfire_grace_time=3600
         )
         app.logger.info("HDoujin Token 验证任务已添加，将每 24 小时运行一次。")
+
+        # 添加 H@H 状态检查任务
+        hath_job_id = 'check_hath_status'
+        is_hath_enabled = app.config.get('HATH_CHECK_ENABLED', False)
+        hath_check_interval = app.config.get('HATH_CHECK_INTERVAL', 30)  # 默认 30 分钟
+        existing_hath_job = scheduler.get_job(hath_job_id)
+
+        if existing_hath_job:
+            scheduler.remove_job(hath_job_id)
+
+        if is_hath_enabled:
+            scheduler.add_job(
+                id=hath_job_id,
+                func=check_hath_status_job,
+                trigger='interval',
+                minutes=hath_check_interval,
+                misfire_grace_time=600  # 10分钟的宽限时间
+            )
+            app.logger.info(f"H@H 状态检查任务已添加，将每 {hath_check_interval} 分钟运行一次。")
+        else:
+            if existing_hath_job:
+                app.logger.info("H@H 状态检查任务已禁用并移除。")
 
 
 def init_scheduler(app):

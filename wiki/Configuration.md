@@ -28,10 +28,12 @@ ehentai:
   ipb_member_id: ""
   ipb_pass_hash: ""
   favorite_sync: false
-  interval: "6h"
+  favorite_sync_interval: "6h"
   favcat_whitelist: []
   initial_scan_pages: 1
   auto_download_favorites: false
+  hath_check_enabled: false
+  hath_check_interval: "30m"
 
 nhentai:
   cookie: ""
@@ -130,10 +132,30 @@ move_path: "/mnt/library/[{{writer}}] {{title}}.cbz"
 | `ipb_member_id` | string | `''` |E-Hentai Cookie 中获取 |
 | `ipb_pass_hash` | string | `''` | E-Hentai Cookie 中获取 |
 | `favorite_sync` | bool | `false`| 启用收藏夹自动同步 |
-| `interval` | string | `6h`| 同步间隔（如 `6h`, `30m`, `1d`） |
-| `favcat_whitelist` | list | `''`| 要同步的收藏夹编号列表（0,1,2,...,9），空表示全部 |
+| `favorite_sync_interval` | string | `6h`| 收藏夹同步间隔（支持 `m`/`h`/`d` 单位，如 `30m`、`6h`、`1d`） |
+| `favcat_whitelist` | list | `[]`| 要同步的收藏夹编号列表（0-9），空表示全部 |
 | `initial_scan_pages` | int | `1`| 首次扫描页数，0 表示全量扫描|
 | `auto_download_favorites` | bool | `false`| 自动下载本地收藏夹中缺失的项目 |
+| `hath_check_enabled` | bool | `false`| 启用 H@H 客户端状态监控 |
+| `hath_check_interval` | string | `30m`| H@H 状态检查间隔（支持 `m`/`h`/`d` 单位，最小 5 分钟） |
+
+**时间间隔格式说明:**
+
+时间间隔支持以下单位格式：
+- **分钟**: `30m`, `15min`, `45mins`, `60minutes`
+- **小时**: `6h`, `12hr`, `24hrs`, `2hours`
+- **天**: `1d`, `7day`, `30days`
+
+**H@H 监控功能:**
+
+启用后会定期检查你的 Hentai@Home 客户端状态，并在状态变化时发送通知：
+- 客户端离线通知
+- 客户端恢复在线通知
+- 其他状态变化通知
+
+**API 端点:**
+- `GET /api/ehentai/hath/status` - 获取所有客户端状态
+- `GET /api/ehentai/hath/check` - 手动触发检查并返回最新状态
 
 
 ### NHentai 配置
@@ -256,6 +278,9 @@ notification:
 - `task.error` - 任务失败
 - `komga.new` - Komga 新书入库
 - `komga.delete` - Komga 书籍被删除
+- `hath.offline` - H@H 客户端离线
+- `hath.online` - H@H 客户端恢复在线
+- `hath.status_change` - H@H 客户端状态变化
 
 详细配置请参考 [通知配置文档](Notifications.md)。
 

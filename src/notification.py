@@ -77,6 +77,38 @@ def send_apprise(notifiers, event, data, logger=None):
             f"书籍ID: {data.get('id')}",
             f"系列ID: {data.get('seriesId')}"
         ]
+    elif event == 'hath.offline':
+        title = "H@H 客户端离线警告"
+        message_list = [
+            f"客户端: {data.get('client')}",
+            f"客户端ID: {data.get('client_id')}",
+            f"状态: {data.get('status')}",
+            f"上次在线: {data.get('last_seen')}",
+            f"IP地址: {data.get('client_ip', 'N/A')}",
+            f"版本: {data.get('version', 'N/A')}",
+            f"信任度: {data.get('trust')}",
+            f"质量: {data.get('quality')}"
+        ]
+    elif event == 'hath.online':
+        title = "H@H 客户端恢复在线"
+        message_list = [
+            f"客户端: {data.get('client')}",
+            f"客户端ID: {data.get('client_id')}",
+            f"状态: {data.get('status')}",
+            f"IP地址: {data.get('client_ip', 'N/A')}",
+            f"版本: {data.get('version', 'N/A')}",
+            f"信任度: {data.get('trust')}",
+            f"质量: {data.get('quality')}"
+        ]
+    elif event == 'hath.status_change':
+        title = "H@H 客户端状态变化"
+        message_list = [
+            f"客户端: {data.get('client')}",
+            f"客户端ID: {data.get('client_id')}",
+            f"状态变化: {data.get('last_status')} -> {data.get('status')}",
+            f"上次在线: {data.get('last_seen')}",
+            f"IP地址: {data.get('client_ip', 'N/A')}"
+        ]
     else:
         title = f"Hentai Assistant 任务通知 - {event}"
         message_list = [f"任务ID: {data.get('task_id')}", f"URL: {data.get('url')}"]

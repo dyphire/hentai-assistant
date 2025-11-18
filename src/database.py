@@ -97,6 +97,32 @@ class TaskDatabase:
 
             conn.commit()
 
+            # 创建 H@H 状态记录表
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS hath_status (
+                    client_id INTEGER PRIMARY KEY,
+                    client TEXT NOT NULL,
+                    status TEXT,
+                    last_status TEXT,
+                    created TEXT,
+                    last_seen TEXT,
+                    files_served INTEGER,
+                    client_ip TEXT,
+                    port INTEGER,
+                    version TEXT,
+                    max_speed TEXT,
+                    trust TEXT,
+                    quality INTEGER,
+                    hitrate TEXT,
+                    hathrate TEXT,
+                    country TEXT,
+                    last_check TEXT,
+                    status_changed_at TEXT
+                )
+            ''')
+
+            conn.commit()
+
     def add_task(self, task_id: str, status: str = TaskStatus.IN_PROGRESS,
                  filename: Optional[str] = None, error: Optional[str] = None,
                  url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None) -> bool:
@@ -509,6 +535,153 @@ class TaskDatabase:
             except sqlite3.Error as e:
                 print(f"Database error getting latest added time: {e}")
                 return None
+
+    def upsert_hath_status(self, clients: List[Dict]) -> bool:
+        """
+        更新 H@H 客户端状态
+        
+        Args:
+            clients: 客户端状态列表，每个元素包含 client_id, client, status 等字段
+        
+        Returns:
+            操作是否成功
+        """
+        if not clients:
+            return True
+        
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    now = datetime.now(timezone.utc).isoformat()
+                    
+                    for client in clients:
+                        client_id = client.get('client_id')
+                        if not client_id:
+                            continue
+                        
+                        # 获取上一次的状态
+                        cursor = conn.execute(
+                            'SELECT status FROM hath_status WHERE client_id = ?',
+                            (client_id,)
+                        )
+                        row = cursor.fetchone()
+                        last_status = row[0] if row else None
+                        
+                        current_status = client.get('status')
+                        
+                        # 如果状态发生变化，更新 status_changed_at
+                        if last_status != current_status:
+                            status_changed_at = now
+                        else:
+                            # 保持原有的 status_changed_at
+                            cursor = conn.execute(
+                                'SELECT status_changed_at FROM hath_status WHERE client_id = ?',
+                                (client_id,)
+                            )
+                            row = cursor.fetchone()
+                            status_changed_at = row[0] if row else now
+                        
+                        # UPSERT 操作
+                        conn.execute('''
+                            INSERT INTO hath_status (
+                                client_id, client, status, last_status, created, last_seen,
+                                files_served, client_ip, port, version, max_speed, trust,
+                                quality, hitrate, hathrate, country, last_check, status_changed_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(client_id) DO UPDATE SET
+                                client = excluded.client,
+                                last_status = hath_status.status,
+                                status = excluded.status,
+                                created = excluded.created,
+                                last_seen = excluded.last_seen,
+                                files_served = excluded.files_served,
+                                client_ip = excluded.client_ip,
+                                port = excluded.port,
+                                version = excluded.version,
+                                max_speed = excluded.max_speed,
+                                trust = excluded.trust,
+                                quality = excluded.quality,
+                                hitrate = excluded.hitrate,
+                                hathrate = excluded.hathrate,
+                                country = excluded.country,
+                                last_check = excluded.last_check,
+                                status_changed_at = excluded.status_changed_at
+                        ''', (
+                            client_id,
+                            client.get('client'),
+                            current_status,
+                            last_status,
+                            client.get('created'),
+                            client.get('last_seen'),
+                            client.get('files_served'),
+                            client.get('client_ip'),
+                            client.get('port'),
+                            client.get('version'),
+                            client.get('max_speed'),
+                            client.get('trust'),
+                            client.get('quality'),
+                            client.get('hitrate'),
+                            client.get('hathrate'),
+                            client.get('country'),
+                            now,
+                            status_changed_at
+                        ))
+                    
+                    conn.commit()
+                return True
+            except sqlite3.Error as e:
+                print(f"Database error upserting H@H status: {e}")
+                return False
+
+    def get_hath_status(self, client_id: Optional[int] = None) -> Optional[Dict] | List[Dict]:
+        """
+        获取 H@H 客户端状态
+        
+        Args:
+            client_id: 客户端 ID，如果为 None 则返回所有客户端
+        
+        Returns:
+            客户端状态字典或列表
+        """
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    
+                    if client_id is not None:
+                        cursor = conn.execute(
+                            'SELECT * FROM hath_status WHERE client_id = ?',
+                            (client_id,)
+                        )
+                        row = cursor.fetchone()
+                        return dict(row) if row else None
+                    else:
+                        cursor = conn.execute('SELECT * FROM hath_status')
+                        return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                print(f"Database error getting H@H status: {e}")
+                return None
+
+    def get_hath_status_changes(self) -> List[Dict]:
+        """
+        获取状态发生变化的 H@H 客户端
+        
+        Returns:
+            状态发生变化的客户端列表
+        """
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    cursor = conn.execute('''
+                        SELECT * FROM hath_status 
+                        WHERE status != last_status OR last_status IS NULL
+                    ''')
+                    return [dict(row) for row in cursor.fetchall()]
+            except sqlite3.Error as e:
+                print(f"Database error getting H@H status changes: {e}")
+                return []
 
 # 全局数据库实例
 task_db = TaskDatabase()

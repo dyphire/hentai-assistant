@@ -374,3 +374,87 @@ def handle_favorite_deleted(data):
         if global_logger:
             global_logger.error(f"从线上收藏夹删除 gid: {gid} 失败。")
         return json_response({'error': f'Failed to delete favorite (gid: {gid}) from online favorites.'}), 500
+
+
+@bp.route('/api/ehentai/hath/status', methods=['GET'])
+def get_hath_status():
+    """
+    获取 H@H 客户端状态
+    
+    返回所有客户端的当前状态和历史记录
+    """
+    from database import task_db
+    
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        # 从数据库获取所有客户端状态
+        clients = task_db.get_hath_status()
+        
+        if clients is None:
+            return json_response({'error': '获取客户端状态失败'}), 500
+        
+        return json_response({
+            'clients': clients,
+            'total': len(clients) if isinstance(clients, list) else 0
+        }), 200
+        
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"获取 H@H 客户端状态时发生错误: {e}")
+        return json_response({'error': f'获取客户端状态失败: {str(e)}'}), 500
+
+
+@bp.route('/api/ehentai/hath/check', methods=['GET'])
+def check_hath_status():
+    """
+    手动触发 H@H 客户端状态检查并返回最新状态
+    
+    该接口会立即检查客户端状态，更新数据库，在状态变化时发送通知，并返回最新的状态列表。
+    即使检查失败，也会返回数据库中的现有数据。
+    """
+    from database import task_db
+    
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    
+    if not current_app.config.get('HATH_CHECK_ENABLED', False):
+        return json_response({'error': 'H@H 状态检查功能未启用'}), 400
+    
+    check_success = False
+    check_error = None
+    
+    # 尝试执行检查
+    try:
+        from scheduler import check_hath_status_job
+        check_hath_status_job()
+        check_success = True
+        
+        if global_logger:
+            global_logger.info("手动触发 H@H 客户端状态检查完成")
+            
+    except Exception as e:
+        check_error = str(e)
+        if global_logger:
+            global_logger.error(f"H@H 状态检查失败: {e}，将返回数据库中的现有数据")
+    
+    # 无论检查是否成功，都尝试返回数据库中的状态
+    try:
+        clients = task_db.get_hath_status() or []
+        
+        response_data = {
+            'clients': clients,
+            'count': len(clients),
+            'check_success': check_success
+        }
+        
+        # 如果检查失败，附加错误信息
+        if check_error:
+            response_data['check_error'] = check_error
+        
+        return json_response(response_data), 200
+        
+    except Exception as e:
+        # 数据库读取也失败了，这才是真正的错误
+        if global_logger:
+            global_logger.error(f"获取 H@H 状态数据失败: {e}")
+        return json_response({'error': f'获取状态数据失败: {str(e)}'}), 500
+

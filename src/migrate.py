@@ -134,6 +134,59 @@ def migrate_listen_categories_to_favcat_whitelist():
     except Exception as e:
         print(f"迁移 listen_categories 时出错: {e}")
 
+def migrate_interval_to_favorite_sync_interval():
+    """
+    检查 config.yaml 中的 ehentai.interval 字段，如果存在且没有 favorite_sync_interval，
+    则将其重命名为 favorite_sync_interval，并确保带有时间单位。
+    """
+    config_dir = 'data'
+    yaml_path = os.path.join(config_dir, 'config.yaml')
+    
+    if not os.path.exists(yaml_path):
+        return
+    
+    try:
+        # 读取 yaml 配置
+        with open(yaml_path, 'r', encoding='utf-8') as yaml_file:
+            config = yaml.safe_load(yaml_file) or {}
+        
+        ehentai = config.get('ehentai', {})
+        
+        # 如果已经有 favorite_sync_interval 或没有 interval，则跳过
+        if 'favorite_sync_interval' in ehentai or 'interval' not in ehentai:
+            return
+        
+        print(f"检测到旧的 interval 配置，正在迁移到 favorite_sync_interval...")
+        
+        old_interval = ehentai.get('interval')
+        
+        # 如果是纯数字（没有单位），添加 'h' 后缀（旧默认单位为小时）
+        new_interval = str(old_interval).strip().lower()
+        if new_interval and not (new_interval.endswith('m') or new_interval.endswith('h') or new_interval.endswith('d')):
+            # 纯数字，添加 'h' 单位
+            new_interval = f"{new_interval}h"
+            print(f"  添加默认单位: {old_interval} -> {new_interval}")
+        else:
+            new_interval = old_interval
+        
+        # 重命名字段
+        ehentai['favorite_sync_interval'] = new_interval
+        del ehentai['interval']
+        
+        config['ehentai'] = ehentai
+        
+        # 写回 yaml 文件
+        with open(yaml_path, 'w', encoding='utf-8') as yaml_file:
+            for i, (section, data) in enumerate(config.items()):
+                if i > 0:
+                    yaml_file.write('\n')
+                yaml.dump({section: data}, yaml_file, allow_unicode=True, sort_keys=False)
+        
+        print(f"interval 迁移成功: {old_interval} -> favorite_sync_interval: {new_interval}")
+    
+    except Exception as e:
+        print(f"迁移 interval 时出错: {e}")
+
 def migrate_ini_to_yaml():
     """
     检查是否存在 config.ini 文件，如果存在，则将其配置合并到 config.yaml，
@@ -194,6 +247,61 @@ def migrate_ini_to_yaml():
     # 在 ini 迁移后，执行其他迁移
     migrate_cookie_to_credentials()
     migrate_listen_categories_to_favcat_whitelist()
+    migrate_interval_to_favorite_sync_interval()
+    migrate_numeric_intervals_to_unit_format()
+
+def migrate_numeric_intervals_to_unit_format():
+    """
+    检查 config.yaml 中的时间间隔字段，如果是纯数字（没有单位），
+    则根据字段类型添加合适的单位后缀。
+    
+    - favorite_sync_interval: 纯数字 -> 添加 'h' (小时)
+    - hath_check_interval: 纯数字 -> 添加 'm' (分钟)
+    """
+    config_dir = 'data'
+    yaml_path = os.path.join(config_dir, 'config.yaml')
+    
+    if not os.path.exists(yaml_path):
+        return
+    
+    try:
+        # 读取 yaml 配置
+        with open(yaml_path, 'r', encoding='utf-8') as yaml_file:
+            config = yaml.safe_load(yaml_file) or {}
+        
+        ehentai = config.get('ehentai', {})
+        modified = False
+        
+        # 处理 favorite_sync_interval（默认单位：小时）
+        if 'favorite_sync_interval' in ehentai:
+            fav_interval = str(ehentai['favorite_sync_interval']).strip().lower()
+            if fav_interval and not (fav_interval.endswith('m') or fav_interval.endswith('h') or fav_interval.endswith('d')):
+                new_value = f"{fav_interval}h"
+                print(f"迁移 favorite_sync_interval: {ehentai['favorite_sync_interval']} -> {new_value}")
+                ehentai['favorite_sync_interval'] = new_value
+                modified = True
+        
+        # 处理 hath_check_interval（默认单位：分钟）
+        if 'hath_check_interval' in ehentai:
+            hath_interval = str(ehentai['hath_check_interval']).strip().lower()
+            if hath_interval and not (hath_interval.endswith('m') or hath_interval.endswith('h') or hath_interval.endswith('d')):
+                new_value = f"{hath_interval}m"
+                print(f"迁移 hath_check_interval: {ehentai['hath_check_interval']} -> {new_value}")
+                ehentai['hath_check_interval'] = new_value
+                modified = True
+        
+        # 如果有修改，写回文件
+        if modified:
+            config['ehentai'] = ehentai
+            with open(yaml_path, 'w', encoding='utf-8') as yaml_file:
+                for i, (section, data) in enumerate(config.items()):
+                    if i > 0:
+                        yaml_file.write('\n')
+                    yaml.dump({section: data}, yaml_file, allow_unicode=True, sort_keys=False)
+            print("时间间隔格式迁移完成")
+    
+    except Exception as e:
+        print(f"迁移时间间隔格式时出错: {e}")
 
 if __name__ == '__main__':
     # 允许直接运行此脚本进行测试

@@ -33,10 +33,12 @@ def get_default_config():
             'ipb_member_id': '',
             'ipb_pass_hash': '',
             'favorite_sync': 'false',
-            'interval': '6h',
+            'favorite_sync_interval': '6h',
             'favcat_whitelist': [],
             'initial_scan_pages': 1,
-            'auto_download_favorites': 'false'
+            'auto_download_favorites': 'false',
+            'hath_check_enabled': 'false',
+            'hath_check_interval': '30m'
         },
         'nhentai': {
             'cookie': ''

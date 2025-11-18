@@ -884,3 +884,161 @@ class EHentaiTools:
             if self.logger:
                 self.logger.error(f"从收藏夹中删除 gid={gid} 时发生网络错误: {e}")
             return False
+
+    def get_hath_status(self):
+        """
+        获取 Hentai@Home 客户端状态列表
+        
+        返回格式:
+        [
+            {
+                "client": str,              # 客户端名称
+                "client_id": int,            # 客户端 ID
+                "status": str,               # 状态 (Online/Offline 等)
+                "created": str,              # 创建日期
+                "last_seen": str,            # 最后在线时间
+                "files_served": int,         # 已服务文件数
+                "client_ip": str,            # 客户端 IP
+                "port": int,                 # 端口
+                "version": str,              # 客户端版本
+                "max_speed": str,            # 最大速度
+                "trust": str,                # 信任度 (可能带 +/- 符号)
+                "quality": int,              # 质量评分
+                "hitrate": str,              # 命中率
+                "hathrate": str,             # H@H 评分
+                "country": str               # 国家/地区
+            },
+            ...
+        ]
+        
+        如果发生错误，返回 None
+        """
+        url = "https://e-hentai.org/hentaiathome.php"
+        
+        try:
+            response = self.session.get(url, timeout=10)
+            if response.status_code != 200:
+                if self.logger:
+                    self.logger.error(f"获取 H@H 状态页面失败: status_code={response.status_code}")
+                return None
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # 检查是否需要登录
+            if 'login' in response.url.lower():
+                if self.logger:
+                    self.logger.error("需要登录才能访问 H@H 状态页面，请检查 cookie 配置")
+                return None
+            
+            # 查找客户端信息表格
+            table = soup.find('table', id='hct')
+            if not table:
+                if self.logger:
+                    self.logger.warning("未找到 H@H 客户端信息表格，可能没有配置客户端")
+                return []
+            
+            clients = []
+            rows = table.find_all('tr')
+            
+            # 跳过表头（第一行）
+            for row in rows[1:]:
+                cols = row.find_all('td')
+                # 实际表格有 15 列
+                if len(cols) < 15:
+                    if self.logger:
+                        self.logger.warning(f"跳过格式异常的行，列数: {len(cols)}")
+                    continue
+                
+                try:
+                    # 列索引: 0=Client, 1=ID, 2=Status, 3=Created, 4=Last Seen, 5=Files Served,
+                    #         6=Client IP, 7=Port, 8=Version, 9=Max Speed, 10=Trust, 11=Quality,
+                    #         12=Hitrate, 13=Hathrate, 14=Country
+                    
+                    # 客户端名称（可能在 <a> 标签内）
+                    client_link = cols[0].find('a')
+                    client_name = client_link.get_text(strip=True) if client_link else cols[0].get_text(strip=True)
+                    
+                    # 客户端 ID
+                    client_id_text = cols[1].get_text(strip=True)
+                    client_id = int(client_id_text) if client_id_text.isdigit() else 0
+                    
+                    # 状态
+                    status = cols[2].get_text(strip=True)
+                    
+                    # 创建日期
+                    created = cols[3].get_text(strip=True)
+                    
+                    # 最后在线时间
+                    last_seen = cols[4].get_text(strip=True)
+                    
+                    # 已服务文件数
+                    files_served_text = cols[5].get_text(strip=True)
+                    files_served = int(files_served_text) if files_served_text.isdigit() else 0
+                    
+                    # 客户端 IP
+                    client_ip = cols[6].get_text(strip=True)
+                    
+                    # 端口
+                    port_text = cols[7].get_text(strip=True)
+                    port = int(port_text) if port_text.isdigit() else 0
+                    
+                    # 版本
+                    version = cols[8].get_text(strip=True)
+                    
+                    # 最大速度
+                    max_speed = cols[9].get_text(strip=True)
+                    
+                    # 信任度（可能带 +/- 符号和颜色）
+                    trust = cols[10].get_text(strip=True)
+                    
+                    # 质量评分（纯数字）
+                    quality_text = cols[11].get_text(strip=True)
+                    quality = int(quality_text) if quality_text.isdigit() else 0
+                    
+                    # 命中率
+                    hitrate = cols[12].get_text(strip=True)
+                    
+                    # H@H 评分
+                    hathrate = cols[13].get_text(strip=True)
+                    
+                    # 国家/地区
+                    country = cols[14].get_text(strip=True)
+                    
+                    client_info = {
+                        'client': client_name,
+                        'client_id': client_id,
+                        'status': status,
+                        'created': created,
+                        'last_seen': last_seen,
+                        'files_served': files_served,
+                        'client_ip': client_ip,
+                        'port': port,
+                        'version': version,
+                        'max_speed': max_speed,
+                        'trust': trust,
+                        'quality': quality,
+                        'hitrate': hitrate,
+                        'hathrate': hathrate,
+                        'country': country
+                    }
+                    
+                    clients.append(client_info)
+                    
+                except (ValueError, AttributeError, IndexError) as e:
+                    if self.logger:
+                        self.logger.warning(f"解析 H@H 客户端信息时出错: {e}, 列数: {len(cols)}")
+                    continue
+            
+            if self.logger:
+                self.logger.info(f"成功获取 {len(clients)} 个 H@H 客户端状态")
+            
+            return clients
+            
+        except requests.RequestException as e:
+            if self.logger:
+                self.logger.error(f"获取 H@H 状态时发生网络错误: {e}")
+            return None
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"获取 H@H 状态时发生未知错误: {e}")
+            return None

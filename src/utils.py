@@ -156,35 +156,50 @@ def parse_gallery_url(url: str) -> tuple[int | None, str | None]:
 
 def parse_interval_to_hours(interval_str):
     """
-    解析 interval 配置，支持 m(分钟), h(小时), d(天) 后缀，默认为小时
-    返回小时数（浮点数）
+    解析 interval 配置，支持多种常见的时间单位格式
+    返回小时数（浮点数），如果格式无效返回 None
+    
+    支持的格式:
+        分钟: '30m', '30min', '30mins', '30minute', '30minutes'
+        小时: '6h', '6hr', '6hrs', '6hour', '6hours'
+        天:   '1d', '1day', '1days'
     
     示例:
-        '30m' -> 0.5
-        '6h' -> 6.0
-        '1d' -> 24.0
-        '12' -> 12.0 (默认小时)
+        '30m' / '30min' -> 0.5
+        '6h' / '6hours' -> 6.0
+        '1d' / '1day' -> 24.0
+        '12' -> None (缺少单位)
     """
     interval_str = str(interval_str).strip().lower()
+    
+    # 使用正则表达式提取数字和单位
+    import re
+    match = re.match(r'^(\d+(?:\.\d+)?)\s*([a-z]+)$', interval_str)
+    
+    if not match:
+        # 没有匹配到单位
+        logging.warning(f"Invalid interval format ('{interval_str}'): missing time unit. Supported: m/min/h/hour/d/day")
+        return None
+    
     try:
-        if interval_str.endswith('m'):
-            # 分钟
-            value = float(interval_str[:-1])
+        value = float(match.group(1))
+        unit = match.group(2)
+        
+        # 分钟
+        if unit in ('m', 'min', 'mins', 'minute', 'minutes'):
             return value / 60
-        elif interval_str.endswith('h'):
-            # 小时
-            value = float(interval_str[:-1])
+        # 小时
+        elif unit in ('h', 'hr', 'hrs', 'hour', 'hours'):
             return value
-        elif interval_str.endswith('d'):
-            # 天
-            value = float(interval_str[:-1])
+        # 天
+        elif unit in ('d', 'day', 'days'):
             return value * 24
         else:
-            # 没有单位，默认为小时
-            return float(interval_str)
+            logging.warning(f"Invalid interval format ('{interval_str}'): unknown unit '{unit}'. Supported: m/min/h/hour/d/day")
+            return None
     except (ValueError, TypeError, AttributeError) as e:
-        logging.warning(f"Invalid interval format ('{interval_str}'). Falling back to default 24 hours. Error: {e}")
-        return 24.0
+        logging.warning(f"Invalid interval format ('{interval_str}'). Error: {e}")
+        return None
 
 def chinese_number_to_arabic(cn_num: str) -> str:
     """

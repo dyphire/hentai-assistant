@@ -250,10 +250,30 @@ def check_config(app_instance=None):
 
     # E-Hentai 收藏夹同步设置 (扁平化结构)
     app.config['EH_FAV_SYNC_ENABLED'] = ehentai_config.get('favorite_sync', False)
-    # 解析 interval 配置并转换为小时数（保持浮点数以支持分钟级精度）
-    interval_hours = parse_interval_to_hours(ehentai_config.get('interval', '6h'))
+    # 解析 favorite_sync_interval 配置并转换为小时数（保持浮点数以支持分钟级精度）
+    fav_interval = ehentai_config.get('favorite_sync_interval', '6h')
+    interval_hours = parse_interval_to_hours(fav_interval)
+    if interval_hours is None:
+        logging.error(f"Invalid 'ehentai.favorite_sync_interval': {fav_interval}. Must include time unit (m/h/d). Using default 6h.")
+        interval_hours = 6.0
     app.config['EH_FAV_SYNC_INTERVAL'] = interval_hours
     app.config['EH_FAV_AUTO_DOWNLOAD'] = ehentai_config.get('auto_download_favorites', False)
+
+    # H@H 监控设置
+    app.config['HATH_CHECK_ENABLED'] = ehentai_config.get('hath_check_enabled', False)
+    # 解析 hath_check_interval 并转换为分钟数
+    hath_interval = ehentai_config.get('hath_check_interval', '30m')
+    hath_interval_hours = parse_interval_to_hours(hath_interval)
+    if hath_interval_hours is None:
+        logging.error(f"Invalid 'ehentai.hath_check_interval': {hath_interval}. Must include time unit (m/h/d). Using default 30m.")
+        hath_interval_hours = 0.5  # 30分钟
+    
+    # 转换为分钟，并限制最小间隔为 5 分钟
+    hath_interval_minutes = hath_interval_hours * 60
+    if hath_interval_minutes < 5:
+        logging.warning(f"'ehentai.hath_check_interval' too small ({hath_interval_minutes:.2f} minutes), setting to minimum 5 minutes.")
+        hath_interval_minutes = 5
+    app.config['HATH_CHECK_INTERVAL'] = int(hath_interval_minutes)
 
     # 首次扫描页数：0 表示全量扫描，其他数字表示扫描指定页数
     try:
@@ -1139,8 +1159,9 @@ def task_failure_processing(url, task_id, logger, tasks, tasks_lock):
     return decorator
 
 # 确保这个路由在所有 API 路由之后定义
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
+# 只处理 GET 请求，避免拦截 API 的 POST/PUT/DELETE 等请求
+@app.route('/', defaults={'path': ''}, methods=['GET'])
+@app.route('/<path:path>', methods=['GET'])
 def serve_vue_app(path):
     # 在开发模式下，我们不服务静态文件，而是让 Vue CLI 自己的服务器处理
     # 在生产模式下，我们服务构建后的 index.html
