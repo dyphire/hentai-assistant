@@ -413,16 +413,21 @@ def check_hath_status():
     即使检查失败，也会返回数据库中的现有数据。
     """
     from database import task_db
+    from scheduler import scheduler
     
     global_logger = current_app.config.get('GLOBAL_LOGGER')
     
-    if not current_app.config.get('HATH_CHECK_ENABLED', False):
+    # 使用调度器的应用实例检查配置，确保与定时任务使用相同的配置
+    with scheduler.app.app_context():
+        hath_enabled = scheduler.app.config.get('HATH_CHECK_ENABLED', False)
+    
+    if not hath_enabled:
         return json_response({'error': 'H@H 状态检查功能未启用'}), 400
     
     check_success = False
     check_error = None
     
-    # 尝试执行检查
+    # 尝试执行检查（check_hath_status_job 会使用 scheduler.app 的上下文）
     try:
         from scheduler import check_hath_status_job
         check_hath_status_job()

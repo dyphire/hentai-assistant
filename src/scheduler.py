@@ -413,8 +413,12 @@ def check_hath_status_job():
 def update_scheduler_jobs(app):
     """
     根据当前应用配置更新调度器中的任务。
-    保存配置后，如果任务被启用，会立即触发一次执行。
+    保存配置后，如果任务被启用,会立即触发一次执行。
     """
+    # 同步更新 scheduler.app 的配置，确保调度任务使用最新配置
+    if scheduler.app:
+        scheduler.app.config.update(app.config)
+    
     with app.app_context():
         job_id = 'sync_eh_favorites'
         is_enabled = app.config.get('EH_FAV_SYNC_ENABLED', False)
