@@ -312,102 +312,17 @@ def refresh_hdoujin_token_job():
 
 def check_hath_status_job():
     """
-    定期检查 Hentai@Home 客户端状态的任务。
-    该函数将由调度器定时调用。
-    
-    注意：使用与其他 E-Hentai 功能相同的 EH_TOOLS 实例，
-    Cookie 验证由 refresh_eh_cookie_job 负责，无需重复验证。
+    定期检查 Hentai@Home 客户端状态的调度任务。
+    该函数将由调度器定时调用，实际检查逻辑在 routes/ehentai.py 的 perform_hath_status_check() 中。
     """
+    from routes.ehentai import perform_hath_status_check
+    
     with scheduler.app.app_context():
         logger = current_app.logger
         logger.info("定时任务触发: 开始检查 H@H 客户端状态...")
-
-        try:
-            from database import task_db
-            from notification import notify
-            
-            config = current_app.config
-            
-            # 获取共享的 EH_TOOLS 实例
-            ehentai_tool = config.get('EH_TOOLS')
-            if not ehentai_tool:
-                logger.warning("EH_TOOLS 未初始化，跳过 H@H 状态检查。")
-                return
-
-            # 获取当前客户端状态
-            # 如果 cookie 失效，get_hath_status() 会返回 None 并记录错误
-            clients = ehentai_tool.get_hath_status()
-            
-            if clients is None:
-                logger.error("获取 H@H 客户端状态失败，可能是网络错误或 Cookie 已失效")
-                logger.info("Cookie 验证将在下次 refresh_eh_cookie_job 运行时自动进行")
-                return
-            
-            if not clients:
-                logger.info("未找到任何 H@H 客户端")
-                return
-            
-            logger.info(f"成功获取 {len(clients)} 个 H@H 客户端状态")
-            
-            # 保存到数据库并检测状态变化
-            task_db.upsert_hath_status(clients)
-            
-            # 获取状态发生变化的客户端
-            changed_clients = task_db.get_hath_status_changes()
-            
-            if changed_clients:
-                logger.info(f"检测到 {len(changed_clients)} 个客户端状态发生变化")
-                
-                # 为每个状态变化的客户端发送通知
-                for client in changed_clients:
-                    client_name = client.get('client', 'Unknown')
-                    client_id = client.get('client_id', 0)
-                    current_status = client.get('status', 'Unknown')
-                    last_status = client.get('last_status')
-                    
-                    # 如果是首次检查（last_status 为 None），不发送通知
-                    if last_status is None:
-                        logger.info(f"客户端 {client_name} (ID: {client_id}) 首次记录，状态: {current_status}")
-                        continue
-                    
-                    # 判断是离线还是恢复在线
-                    if current_status == 'Online' and last_status != 'Online':
-                        # 恢复在线
-                        event = 'hath.online'
-                        logger.info(f"客户端 {client_name} (ID: {client_id}) 已恢复在线")
-                    elif current_status != 'Online' and last_status == 'Online':
-                        # 离线
-                        event = 'hath.offline'
-                        logger.warning(f"客户端 {client_name} (ID: {client_id}) 已离线，当前状态: {current_status}")
-                    else:
-                        # 其他状态变化
-                        event = 'hath.status_change'
-                        logger.info(f"客户端 {client_name} (ID: {client_id}) 状态变化: {last_status} -> {current_status}")
-                    
-                    # 发送通知
-                    notify(
-                        event=event,
-                        data={
-                            'client': client_name,
-                            'client_id': client_id,
-                            'status': current_status,
-                            'last_status': last_status,
-                            'last_seen': client.get('last_seen'),
-                            'client_ip': client.get('client_ip'),
-                            'port': client.get('port'),
-                            'version': client.get('version'),
-                            'trust': client.get('trust'),
-                            'quality': client.get('quality'),
-                            'hitrate': client.get('hitrate'),
-                            'hathrate': client.get('hathrate')
-                        },
-                        logger=logger
-                    )
-            else:
-                logger.info("所有 H@H 客户端状态正常，无变化")
-
-        except Exception as e:
-            logger.error(f"检查 H@H 客户端状态时发生错误: {e}", exc_info=True)
+        
+        # 调用共享的检查函数
+        perform_hath_status_check(current_app, logger)
 
 
 def update_scheduler_jobs(app):

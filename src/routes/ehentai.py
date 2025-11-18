@@ -404,6 +404,156 @@ def get_hath_status():
         return json_response({'error': f'获取客户端状态失败: {str(e)}'}), 500
 
 
+def perform_hath_status_check(app_context, logger):
+    """
+    执行 H@H 客户端状态检查的核心逻辑
+    
+    该函数会：
+    1. 从 E-Hentai 获取客户端状态
+    2. 更新数据库
+    3. 检测状态变化并发送通知
+    
+    参数:
+    - app_context: Flask 应用上下文
+    - logger: 日志记录器
+    
+    返回值:
+    - True: 检查成功
+    - False: 检查失败（网络错误、Cookie 失效等）
+    """
+    from database import task_db
+    from notification import notify
+    
+    try:
+        config = app_context.config
+        
+        # 获取共享的 EH_TOOLS 实例
+        ehentai_tool = config.get('EH_TOOLS')
+        if not ehentai_tool:
+            logger.warning("EH_TOOLS 未初始化，跳过 H@H 状态检查。")
+            return False
+
+        # 获取当前客户端状态
+        clients = ehentai_tool.get_hath_status()
+        
+        if clients is None:
+            logger.error("获取 H@H 客户端状态失败，可能是网络错误或 Cookie 已失效")
+            
+            # 将数据库中所有已知客户端的状态标记为 "Unreachable"
+            existing_clients = task_db.get_hath_status()
+            if existing_clients:
+                logger.info(f"将 {len(existing_clients)} 个客户端状态标记为 Unreachable")
+                for client in existing_clients:
+                    client['status'] = 'Unreachable'
+                
+                # 更新数据库并检测状态变化
+                task_db.upsert_hath_status(existing_clients)
+                
+                # 获取状态变化并发送通知
+                changed_clients = task_db.get_hath_status_changes()
+                if changed_clients:
+                    for client in changed_clients:
+                        client_name = client.get('client', 'Unknown')
+                        client_id = client.get('client_id', 0)
+                        current_status = client.get('status', 'Unknown')
+                        last_status = client.get('last_status')
+                        
+                        # 跳过首次记录
+                        if last_status is None:
+                            continue
+                        
+                        # 发送网络不可达通知
+                        if current_status == 'Unreachable':
+                            logger.warning(f"客户端 {client_name} (ID: {client_id}) 无法访问，上次状态: {last_status}")
+                            notify(
+                                event='hath.unreachable',
+                                data={
+                                    'client': client_name,
+                                    'client_id': client_id,
+                                    'status': current_status,
+                                    'last_status': last_status,
+                                    'last_seen': client.get('last_seen'),
+                                    'client_ip': client.get('client_ip'),
+                                    'port': client.get('port')
+                                },
+                                logger=logger
+                            )
+            
+            return False
+        
+        if not clients:
+            logger.info("未找到任何 H@H 客户端")
+            return True
+        
+        logger.info(f"成功获取 {len(clients)} 个 H@H 客户端状态")
+        
+        # 保存到数据库并检测状态变化
+        task_db.upsert_hath_status(clients)
+        
+        # 获取状态发生变化的客户端
+        changed_clients = task_db.get_hath_status_changes()
+        
+        if changed_clients:
+            logger.info(f"检测到 {len(changed_clients)} 个客户端状态发生变化")
+            
+            # 为每个状态变化的客户端发送通知
+            for client in changed_clients:
+                client_name = client.get('client', 'Unknown')
+                client_id = client.get('client_id', 0)
+                current_status = client.get('status', 'Unknown')
+                last_status = client.get('last_status')
+                
+                # 如果是首次检查（last_status 为 None），不发送通知
+                if last_status is None:
+                    logger.info(f"客户端 {client_name} (ID: {client_id}) 首次记录，状态: {current_status}")
+                    continue
+                
+                # 判断状态变化类型
+                if current_status == 'Online' and last_status != 'Online':
+                    # 从任何非在线状态恢复
+                    event = 'hath.online'
+                    logger.info(f"客户端 {client_name} (ID: {client_id}) 已恢复在线，上次状态: {last_status}")
+                elif current_status == 'Unreachable':
+                    # 网络不可达（已在上面的异常处理中发送通知，这里跳过）
+                    continue
+                elif current_status != 'Online' and last_status == 'Online':
+                    # 从在线变为离线
+                    event = 'hath.offline'
+                    logger.warning(f"客户端 {client_name} (ID: {client_id}) 已离线，当前状态: {current_status}")
+                else:
+                    # 其他状态变化
+                    event = 'hath.status_change'
+                    logger.info(f"客户端 {client_name} (ID: {client_id}) 状态变化: {last_status} -> {current_status}")
+                
+                # 发送通知
+                notify(
+                    event=event,
+                    data={
+                        'client': client_name,
+                        'client_id': client_id,
+                        'status': current_status,
+                        'last_status': last_status,
+                        'last_seen': client.get('last_seen'),
+                        'client_ip': client.get('client_ip'),
+                        'port': client.get('port'),
+                        'version': client.get('version'),
+                        'trust': client.get('trust'),
+                        'quality': client.get('quality'),
+                        'hitrate': client.get('hitrate'),
+                        'hathrate': client.get('hathrate')
+                    },
+                    logger=logger
+                )
+        else:
+            logger.info("所有 H@H 客户端状态正常，无变化")
+        
+        return True
+
+    except Exception as e:
+        logger.error(f"检查 H@H 客户端状态时发生错误: {e}", exc_info=True)
+        return False
+
+
 @bp.route('/api/ehentai/hath/check', methods=['GET'])
 def check_hath_status():
     """
@@ -411,35 +561,31 @@ def check_hath_status():
     
     该接口会立即检查客户端状态，更新数据库，在状态变化时发送通知，并返回最新的状态列表。
     即使检查失败，也会返回数据库中的现有数据。
+    
+    注意：此接口不受 hath_check_enabled 配置限制，该配置仅控制定时任务。
     """
     from database import task_db
-    from scheduler import scheduler
     
     global_logger = current_app.config.get('GLOBAL_LOGGER')
     
-    # 使用调度器的应用实例检查配置，确保与定时任务使用相同的配置
-    with scheduler.app.app_context():
-        hath_enabled = scheduler.app.config.get('HATH_CHECK_ENABLED', False)
-    
-    if not hath_enabled:
-        return json_response({'error': 'H@H 状态检查功能未启用'}), 400
-    
-    check_success = False
     check_error = None
     
-    # 尝试执行检查（check_hath_status_job 会使用 scheduler.app 的上下文）
+    # 执行检查
     try:
-        from scheduler import check_hath_status_job
-        check_hath_status_job()
-        check_success = True
+        check_success = perform_hath_status_check(current_app, global_logger or current_app.logger)
         
         if global_logger:
-            global_logger.info("手动触发 H@H 客户端状态检查完成")
+            if check_success:
+                global_logger.info("手动触发 H@H 客户端状态检查成功")
+            else:
+                global_logger.warning("手动触发 H@H 客户端状态检查失败，将返回数据库中的历史数据")
+                check_error = "检查失败，可能是网络错误或目标站点异常"
             
     except Exception as e:
+        check_success = False
         check_error = str(e)
         if global_logger:
-            global_logger.error(f"H@H 状态检查失败: {e}，将返回数据库中的现有数据")
+            global_logger.error(f"H@H 状态检查异常: {e}，将返回数据库中的现有数据")
     
     # 无论检查是否成功，都尝试返回数据库中的状态
     try:
@@ -451,9 +597,10 @@ def check_hath_status():
             'check_success': check_success
         }
         
-        # 如果检查失败，附加错误信息
+        # 如果检查失败，附加错误信息和警告
         if check_error:
             response_data['check_error'] = check_error
+            response_data['warning'] = '实时检查失败，返回的是数据库中的历史数据'
         
         return json_response(response_data), 200
         
