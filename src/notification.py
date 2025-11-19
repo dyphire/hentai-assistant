@@ -109,6 +109,17 @@ def send_apprise(notifiers, event, data, logger=None):
             f"上次在线: {data.get('last_seen')}",
             f"IP地址: {data.get('client_ip', 'N/A')}"
         ]
+    elif event == 'hath.unreachable':
+        title = "H@H 客户端网络不可达警告"
+        message_list = [
+            f"客户端: {data.get('client')}",
+            f"客户端ID: {data.get('client_id')}",
+            f"当前状态: {data.get('status')}",
+            f"上次状态: {data.get('last_status')}",
+            f"上次在线: {data.get('last_seen')}",
+            f"IP地址: {data.get('client_ip', 'N/A')}",
+            f"端口: {data.get('port', 'N/A')}"
+        ]
     else:
         title = f"Hentai Assistant 任务通知 - {event}"
         message_list = [f"任务ID: {data.get('task_id')}", f"URL: {data.get('url')}"]
