@@ -39,6 +39,7 @@ from routes.task import bp as task_bp
 from routes.config import bp as config_bp
 from routes.hdoujin import bp as hdoujin_bp
 from routes.download import bp as download_bp
+from routes.rss import rss_bp, init_rss_cache
 
 # 全局变量用于存储子进程对象
 notification_process = None
@@ -1210,10 +1211,17 @@ if __name__ == '__main__':
     app.register_blueprint(config_bp)
     app.register_blueprint(hdoujin_bp)
     app.register_blueprint(download_bp)
+    app.register_blueprint(rss_bp)
 
     
     # 仅在主工作进程中执行一次性初始化，以避免 reloader 重复执行
     if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true':
+        # 初始化 RSS 缓存
+        config_data = load_config()
+        rss_config = config_data.get('rss', {})
+        cache_ttl = rss_config.get('cache_ttl', 3600)
+        init_rss_cache(cache_ttl=cache_ttl)
+                
         # 启动时迁移内存中的任务到数据库
         if tasks:
             global_logger.info("正在迁移内存中的任务到数据库...")
