@@ -10,21 +10,6 @@ import hashlib
 import time
 import html
 
-# Namespace mapping for HDoujin tags
-NAMESPACE_MAP = {
-    1: 'artist',
-    2: 'group',
-    3: 'parody',
-    5: 'character',
-    7: 'translator',
-    8: 'male',
-    9: 'female',
-    10: 'mixed',
-    11: 'language',
-    12: 'other',
-    13: 'category',
-}
-
 # RSS 2.0 Template
 RSS_TEMPLATE = Template('''<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0">
@@ -40,9 +25,6 @@ RSS_TEMPLATE = Template('''<?xml version="1.0" encoding="UTF-8"?>
       <guid isPermaLink="true">{{ item.guid }}</guid>
       <pubDate>{{ item.pub_date }}</pubDate>
       <description><![CDATA[{{ item.description }}]]></description>
-      {% for category in item.categories %}
-      <category>{{ category }}</category>
-      {% endfor %}
     </item>
     {% endfor %}
   </channel>
@@ -106,7 +88,8 @@ def generate_hdoujin_rss(
     entries: List[Dict[str, Any]],
     title: str = "HDoujin RSS Feed",
     description: str = "Latest HDoujin entries",
-    base_url: str = "https://hdoujin.co"
+    base_url: str = "https://hdoujin.org",
+    prefer_title: str = "default"
 ) -> str:
     """
     Generate RSS 2.0 feed from HDoujin API entries
@@ -116,6 +99,7 @@ def generate_hdoujin_rss(
         title: RSS feed title
         description: RSS feed description
         base_url: Base URL for HDoujin website
+        prefer_title: Title preference - "japanese" or "default"
         
     Returns:
         RSS 2.0 XML string
@@ -126,9 +110,29 @@ def generate_hdoujin_rss(
         # Extract basic info
         book_id = entry.get('id')
         book_key = entry.get('key', '')
-        book_title = html.escape(entry.get('title', 'Untitled'))
-        subtitle = entry.get('subtitle', '')
+        original_title = entry.get('title', '')  # English title
+        original_subtitle = entry.get('subtitle', '')  # Japanese title
         created_at = entry.get('created_at')
+        
+        # Determine which title to use based on preference
+        if prefer_title == "japanese":
+            if original_subtitle:
+                # Use subtitle (Japanese) as title, title (English) as description
+                book_title = html.escape(original_subtitle)
+                subtitle = original_title if original_title else ''
+            else:
+                # Fallback: if no subtitle, use title
+                book_title = html.escape(original_title) if original_title else 'Untitled'
+                subtitle = ''
+        else:
+            # Default: use title (English) as title, subtitle (Japanese) as description
+            if original_title:
+                book_title = html.escape(original_title)
+                subtitle = original_subtitle
+            else:
+                # Fallback: if no title, use subtitle
+                book_title = html.escape(original_subtitle) if original_subtitle else 'Untitled'
+                subtitle = ''
         
         # Build link and GUID
         link = f"{base_url}/book/{book_key}"
@@ -145,32 +149,16 @@ def generate_hdoujin_rss(
         desc_parts = []
         if thumbnail_url:
             desc_parts.append(f'<img src="{html.escape(thumbnail_url)}" />')
-        if subtitle:
-            desc_parts.append(f'<p>{html.escape(subtitle)}</p>')
+        # Don't add subtitle to description anymore - it's redundant with fallback mechanism
         
         description_content = '<br/>'.join(desc_parts) if desc_parts else book_title
-        
-        # Process tags into categories
-        categories = []
-        tags = entry.get('tags', [])
-        for tag in tags:
-            namespace_id = tag.get('namespace')
-            tag_name = tag.get('name', '')
-            
-            # Map namespace to readable name
-            namespace_name = NAMESPACE_MAP.get(namespace_id, 'unknown')
-            
-            # Format as "namespace:tagname"
-            category = f"{namespace_name}:{tag_name}"
-            categories.append(html.escape(category))
         
         items.append({
             'title': book_title,
             'link': link,
             'guid': guid,
             'pub_date': pub_date,
-            'description': description_content,
-            'categories': categories
+            'description': description_content
         })
     
     # Render RSS template
