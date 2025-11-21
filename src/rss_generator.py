@@ -141,15 +141,14 @@ def generate_hdoujin_rss(
         # Format publication date (RFC 822)
         pub_date = formatdate(timeval=created_at, localtime=False, usegmt=True) if created_at else formatdate()
         
-        # Build description with thumbnail and subtitle
-        thumbnails = entry.get('thumbnails', {})
-        thumbnail_path = thumbnails.get('main', {}).get('path', '')
-        thumbnail_url = f"{thumbnails.get('base', '')}{thumbnail_path}" if thumbnail_path else ""
+        # Build description with thumbnail
+        # API returns 'thumbnail' (not 'thumbnails') with direct URL in 'path'
+        thumbnail = entry.get('thumbnail', {})
+        thumbnail_url = thumbnail.get('path', '') if thumbnail else ""
         
         desc_parts = []
         if thumbnail_url:
             desc_parts.append(f'<img src="{html.escape(thumbnail_url)}" />')
-        # Don't add subtitle to description anymore - it's redundant with fallback mechanism
         
         description_content = '<br/>'.join(desc_parts) if desc_parts else book_title
         
