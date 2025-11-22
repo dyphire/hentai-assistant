@@ -135,7 +135,7 @@ def generate_hdoujin_rss(
                 subtitle = ''
         
         # Build link and GUID
-        link = f"{base_url}/book/{book_key}"
+        link = f"{base_url}/g/{book_id}/{book_key}"
         guid = link
         
         # Format publication date (RFC 822)
