@@ -23,7 +23,7 @@ RSS_TEMPLATE = Template('''<?xml version="1.0" encoding="UTF-8"?>
       <title>{{ item.title }}</title>
       <link>{{ item.link }}</link>
       <guid isPermaLink="true">{{ item.guid }}</guid>
-      <pubDate>{{ item.pub_date }}</pubDate>
+      {% if item.pub_date %}<pubDate>{{ item.pub_date }}</pubDate>{% endif %}
       <description><![CDATA[{{ item.description }}]]></description>
     </item>
     {% endfor %}
@@ -138,8 +138,9 @@ def generate_hdoujin_rss(
         link = f"{base_url}/g/{book_id}/{book_key}"
         guid = link
         
-        # Format publication date (RFC 822)
-        pub_date = formatdate(timeval=created_at, localtime=False, usegmt=True) if created_at else formatdate()
+        # Format publication date (RFC 822) - only if created_at exists
+        # Omit pubDate if not available to avoid fake timestamps
+        pub_date = formatdate(timeval=created_at, localtime=False, usegmt=True) if created_at else None
         
         # Build description with thumbnail
         # API returns 'thumbnail' (not 'thumbnails') with direct URL in 'path'
