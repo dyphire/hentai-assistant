@@ -24,7 +24,7 @@ from providers import nhentai
 from providers import hitomi
 from providers import hdoujin
 from providers.ehtranslator import EhTagTranslator
-from utils import check_dirs, is_valid_zip, TaskStatus, parse_gallery_url, parse_interval_to_hours
+from utils import check_dirs, is_valid_zip, TaskStatus, parse_gallery_url, parse_interval_to_hours, sanitize_filename, truncate_filename
 from notification import notify
 import cbztool
 from database import task_db
@@ -555,9 +555,6 @@ def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_
     return local_file_path
 
 
-def sanitize_filename(s: str) -> str:
-    return re.sub(r'[\\/:*?"<>|]', '_', s)
-
 def check_task_cancelled(task_id, tasks=None, tasks_lock=None):
     # 如果没有传入 tasks 和 tasks_lock，从 app.config 获取
     if tasks is None:
@@ -924,11 +921,17 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
         title = html.unescape(gmetadata['title_jpn'])
     else:
         title = html.unescape(gmetadata['title'])
-    filename = f"{sanitize_filename(title)} [{gmetadata['gid']}]"
+    
+    # 构建文件名，确保不超过文件系统限制
+    sanitized_title = sanitize_filename(title)
+    gid_suffix = f" [{gmetadata['gid']}]"
     if is_hdoujin:
-        filename += ".cbz"
+        ext = ".cbz"
     elif not is_nhentai and not is_hitomi:
-        filename += ".zip"
+        ext = ".zip"
+    else:
+        ext = ""
+    filename = truncate_filename(sanitized_title, f"{gid_suffix}{ext}")
 
     if logger: logger.info(f"准备下载: {filename}")
 

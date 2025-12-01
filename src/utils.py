@@ -241,3 +241,73 @@ def chinese_number_to_arabic(cn_num: str) -> str:
     
     # 无法转换
     return None
+
+def sanitize_filename(s: str) -> str:
+    """移除文件名中的非法字符"""
+    return re.sub(r'[\\/:*?"<>|]', '_', s)
+
+def truncate_filename(title: str, suffix: str, max_bytes: int = 255) -> str:
+    """
+    截断文件名以确保不超过文件系统限制。
+    
+    各平台文件系统限制：
+    - Windows (NTFS): 255 字符
+    - Linux (ext4): 255 字节
+    - macOS (HFS+/APFS): 255 字符
+    
+    为了兼容所有平台，使用 255 字节作为限制。
+    如果文件名过长，从标题中间截断并用 "..." 替换。
+    
+    Args:
+        title: 已经过 sanitize 的标题
+        suffix: 文件名后缀，如 " [123456].zip"
+        max_bytes: 最大字节数限制，默认 255
+        
+    Returns:
+        截断后的完整文件名
+    """
+    filename = f"{title}{suffix}"
+    filename_bytes = filename.encode('utf-8')
+    
+    if len(filename_bytes) <= max_bytes:
+        return filename
+    
+    # 计算后缀的字节数和省略符号的字节数
+    suffix_bytes = len(suffix.encode('utf-8'))
+    ellipsis = "..."
+    ellipsis_bytes = len(ellipsis.encode('utf-8'))  # 3 字节
+    
+    # 标题可用的最大字节数
+    available_bytes = max_bytes - suffix_bytes - ellipsis_bytes
+    
+    if available_bytes <= 0:
+        # 如果后缀本身就超过限制，只能截断后缀（极端情况）
+        return filename[:max_bytes]
+    
+    # 从标题两端保留字符，中间用 ... 替换
+    # 前半部分和后半部分各占一半
+    half_bytes = available_bytes // 2
+    
+    # 从前面截取字符直到接近 half_bytes
+    front_chars = ""
+    front_byte_count = 0
+    for char in title:
+        char_bytes = len(char.encode('utf-8'))
+        if front_byte_count + char_bytes > half_bytes:
+            break
+        front_chars += char
+        front_byte_count += char_bytes
+    
+    # 从后面截取字符直到接近剩余可用字节数
+    remaining_bytes = available_bytes - front_byte_count
+    back_chars = ""
+    back_byte_count = 0
+    for char in reversed(title):
+        char_bytes = len(char.encode('utf-8'))
+        if back_byte_count + char_bytes > remaining_bytes:
+            break
+        back_chars = char + back_chars
+        back_byte_count += char_bytes
+    
+    truncated_title = f"{front_chars}{ellipsis}{back_chars}"
+    return f"{truncated_title}{suffix}"
