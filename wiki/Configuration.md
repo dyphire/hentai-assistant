@@ -11,7 +11,6 @@
 ```yaml
 general:
   port: 5001
-  download_torrent: false
   keep_torrents: false
   keep_original_file: false
   prefer_japanese_title: true
@@ -87,7 +86,6 @@ comicinfo:
 | 配置项 | 类型 | 默认值 | 说明 |
 |--------|------|--------|------|
 | `port` | int | `5001` | Web 服务监听端口 |
-| `download_torrent` | bool | `false` | 优先使用种子下载（需要启用 Aria2 模块） |
 | `keep_torrents` | bool | `false` | 保留下载的种子文件 |
 | `keep_original_file` | bool | `false` | 保留转换前的原始文件 |
 | `prefer_japanese_title` | bool | `true` | 优先使用日文标题 |

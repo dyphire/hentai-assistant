@@ -230,7 +230,6 @@ def check_config(app_instance=None):
     # 通用设置
     general = config_data.get('general', {})
     app.config['PORT'] = int(general.get('port', 5001))
-    app.config['DOWNLOAD_TORRENT'] = general.get('download_torrent', False)
     app.config['KEEP_TORRENTS'] = general.get('keep_torrents', False)
     app.config['KEEP_ORIGINAL_FILE'] = general.get('keep_original_file', False)
     app.config['PREFER_JAPANESE_TITLE'] = general.get('prefer_japanese_title', True)
@@ -482,16 +481,22 @@ def check_config(app_instance=None):
         update_scheduler_jobs(app)
 
 def get_eh_mode(config, mode):
-    aria2 = config.get('ARIA2_TOGGLE', False)
+    aria2_enabled = config.get('ARIA2_TOGGLE', False)
     eh_valid = config.get('EH_VALID', False)
-    download_torrent = mode in ("torrent", "1") if mode else config.get('DOWNLOAD_TORRENT', True)
-    if eh_valid and not aria2:
+    
+    # 用户明确指定了模式
+    if mode in ("torrent", "1"):
+        return "torrent"
+    elif mode in ("archive", "0"):
         return "archive"
-    if aria2 and download_torrent:
+    
+    # 自动决定：有 aria2 优先 torrent，否则用 archive
+    if aria2_enabled:
         return "torrent"
     elif eh_valid:
         return "archive"
-    return "torrent"
+    else:
+        return "torrent"
 
 def send_to_aria2(url=None, torrent=None, dir=None, out=None, logger=None, task_id=None, tasks=None, tasks_lock=None):
     # 检查任务是否被取消

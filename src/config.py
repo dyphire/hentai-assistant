@@ -16,7 +16,6 @@ def get_default_config():
     return {
         'general': {
             'port': '5001',
-            'download_torrent': 'false',
             'keep_torrents': 'false',
             'keep_original_file': 'false',
             'prefer_japanese_title': 'true',
