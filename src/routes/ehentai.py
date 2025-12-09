@@ -179,7 +179,15 @@ def add_favorite():
     """
     将画廊添加到 E-Hentai 收藏夹
 
-    请求体格式:
+    请求体格式（两种方式任选其一）:
+    方式1 (推荐): 
+    {
+        "url": "https://e-hentai.org/g/123456/abc123def456",
+        "favcat": "0",
+        "note": "备注信息（可选）"
+    }
+    
+    方式2 (向后兼容):
     {
         "gid": 123456,
         "token": "abc123def456",
@@ -197,13 +205,24 @@ def add_favorite():
         if not data:
             return json_response({'error': '请提供 JSON 数据'}), 400
 
-        gid = data.get('gid')
-        token = data.get('token')
         favcat = data.get('favcat', '0')  # 默认收藏夹
         note = data.get('note', '')      # 备注，可选
 
-        if not gid or not token:
-            return json_response({'error': '缺少必要参数：gid 和 token'}), 400
+        # 优先使用 URL 参数，如果提供了 URL 则从 URL 解析 gid 和 token
+        url = data.get('url')
+        if url:
+            from utils import parse_gallery_url
+            gid, token = parse_gallery_url(url)
+            if not gid or not token:
+                return json_response({'error': f'无法从 URL 解析 gid 和 token: {url}'}), 400
+            if global_logger and (data.get('gid') or data.get('token')):
+                global_logger.debug(f"使用 URL 参数解析，忽略直接提供的 gid/token")
+        else:
+            # 回退到直接使用 gid 和 token 参数
+            gid = data.get('gid')
+            token = data.get('token')
+            if not gid or not token:
+                return json_response({'error': '请提供 url 或者 (gid + token)'}), 400
 
         # 获取 E-Hentai 工具实例
         eh_tools = current_app.config.get('EH_TOOLS')
