@@ -53,19 +53,9 @@ def refresh_hdoujin_token():
             config_data['hdoujin'] = hdoujin_config
             save_config(config_data)
 
-            # 重新初始化 HDoujin 工具
-            hd = hdoujin.HDoujinTools(
-                session_token=hdoujin_config.get('session_token', ''),
-                refresh_token=hdoujin_config.get('refresh_token', ''),
-                clearance_token=hdoujin_config.get('clearance_token', ''),
-                user_agent=hdoujin_config.get('user_agent', ''),
-                logger=global_logger
-            )
-            current_app.config['HD_TOOLS'] = hd
-
-            # 验证更新后的 token
-            hd_toggle = hd.is_valid_cookie()
-            current_app.config['HD_TOGGLE'] = hd_toggle
+            # 使用统一的刷新函数（会更新现有实例或创建新实例）
+            from providers.hdoujin import refresh_and_sync_hdoujin_config
+            hd_toggle = refresh_and_sync_hdoujin_config(current_app.config, global_logger)
 
             if global_logger:
                 global_logger.info("成功更新 HDoujin tokens 和 User-Agent")

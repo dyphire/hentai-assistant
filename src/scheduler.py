@@ -279,29 +279,19 @@ def refresh_eh_cookie_job():
 def refresh_hdoujin_token_job():
     """
     每日验证 HDoujin token 的有效性并自动刷新。
-    通过调用 HDoujinTools 的 is_valid_cookie 方法来执行验证。
+    使用统一的刷新函数确保配置文件和内存状态同步。
     """
     with scheduler.app.app_context():
         logger = current_app.logger
         logger.info("定时任务触发: 开始验证 HDoujin Token...")
 
         try:
-            config = current_app.config
-            hdoujin_tool = config.get('HD_TOOLS')
-            if not hdoujin_tool:
-                logger.warning("HD_TOOLS 未初始化，跳过 HDoujin Token 验证。")
-                return
-
-            # 验证并自动刷新 token
-            is_valid = hdoujin_tool.is_valid_cookie()
-
+            from providers.hdoujin import refresh_and_sync_hdoujin_config
+            
+            # 使用统一的刷新函数
+            is_valid = refresh_and_sync_hdoujin_config(current_app.config, logger)
+            
             if is_valid:
-                # 获取更新后的 token 并保存到配置
-                updated_tokens = hdoujin_tool.get_tokens()
-                config['HDOUJIN_SESSION_TOKEN'] = updated_tokens.get('session_token', '')
-                config['HDOUJIN_REFRESH_TOKEN'] = updated_tokens.get('refresh_token', '')
-                config['HDOUJIN_CLEARANCE_TOKEN'] = updated_tokens.get('clearance_token', '')
-
                 logger.info("HDoujin Token 验证成功")
             else:
                 logger.warning("HDoujin Token 验证失败")

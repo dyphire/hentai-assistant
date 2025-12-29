@@ -379,3 +379,86 @@ class HDoujinTools:
             if self.logger:
                 self.logger.error(f"下载 hdoujin 画廊失败: {e}")
             return None
+
+
+def refresh_and_sync_hdoujin_config(app_config, logger=None):
+    """
+    验证并刷新 HDoujin token，确保配置文件和 app.config 同步
+    
+    使用单例模式：复用现有的 HDoujinTools 实例，避免频繁创建新实例导致的状态不一致。
+    
+    此函数用于统一处理定时任务、启动初始化和 API 调用中的 token 刷新逻辑。
+    
+    Args:
+        app_config: Flask app.config 对象
+        logger: 日志记录器
+    
+    Returns:
+        bool: token 是否有效
+    """
+    try:
+        from config import load_config, save_config
+        
+        # 1. 从配置文件读取最新值
+        config_data = load_config()
+        hdoujin_config = config_data.get('hdoujin', {})
+        
+        # 2. 获取或创建 HDoujinTools 实例（单例模式）
+        hd = app_config.get('HD_TOOLS')
+        
+        if hd is None or not isinstance(hd, HDoujinTools):
+            # 实例不存在，创建新实例
+            if logger:
+                logger.info("创建新的 HDoujinTools 实例")
+            hd = HDoujinTools(
+                session_token=hdoujin_config.get('session_token', ''),
+                refresh_token=hdoujin_config.get('refresh_token', ''),
+                clearance_token=hdoujin_config.get('clearance_token', ''),
+                user_agent=hdoujin_config.get('user_agent', ''),
+                logger=logger
+            )
+            app_config['HD_TOOLS'] = hd
+        else:
+            # 实例存在，更新 token（避免重建实例）
+            if logger:
+                logger.debug("复用现有 HDoujinTools 实例并更新 token")
+            hd.session_token = hdoujin_config.get('session_token', '')
+            hd.refresh_token = hdoujin_config.get('refresh_token', '')
+            hd.clearance_token = hdoujin_config.get('clearance_token', '')
+            hd.user_agent = hdoujin_config.get('user_agent', '')
+            # 更新全局 User-Agent
+            if hd.user_agent:
+                set_user_agent(hd.user_agent)
+        
+        # 3. 验证并自动刷新（内部会保存到配置文件）
+        is_valid = hd.is_valid_cookie()
+        
+        # 4. 重新读取配置文件，确保获取刷新后的 token
+        config_data = load_config()
+        hdoujin_config = config_data.get('hdoujin', {})
+        
+        # 5. 同步最新值到实例和 app.config
+        # 确保实例中的 token 与配置文件一致（可能被 is_valid_cookie 刷新）
+        hd.session_token = hdoujin_config.get('session_token', '')
+        hd.refresh_token = hdoujin_config.get('refresh_token', '')
+        hd.clearance_token = hdoujin_config.get('clearance_token', '')
+        hd.user_agent = hdoujin_config.get('user_agent', '')
+        
+        app_config['HDOUJIN_SESSION_TOKEN'] = hd.session_token
+        app_config['HDOUJIN_REFRESH_TOKEN'] = hd.refresh_token
+        app_config['HDOUJIN_CLEARANCE_TOKEN'] = hd.clearance_token
+        app_config['HDOUJIN_USER_AGENT'] = hd.user_agent
+        app_config['HD_TOGGLE'] = is_valid
+        
+        if logger:
+            if is_valid:
+                logger.info("HDoujin token 验证成功，配置已同步")
+            else:
+                logger.warning("HDoujin token 验证失败")
+        
+        return is_valid
+        
+    except Exception as e:
+        if logger:
+            logger.error(f"刷新并同步 HDoujin 配置时发生错误: {e}")
+        return False

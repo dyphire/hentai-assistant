@@ -297,17 +297,6 @@ def check_config(app_instance=None):
     nhentai_cookie = nhentai_config.get('cookie', '')
     app.config['NHENTAI_COOKIE'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
 
-    # hdoujin 设置
-    hdoujin_config = config_data.get('hdoujin', {})
-    hdoujin_session_token = hdoujin_config.get('session_token', '')
-    hdoujin_refresh_token = hdoujin_config.get('refresh_token', '')
-    hdoujin_clearance_token = hdoujin_config.get('clearance_token', '')
-    hdoujin_user_agent = hdoujin_config.get('user_agent', '')
-    app.config['HDOUJIN_SESSION_TOKEN'] = hdoujin_session_token
-    app.config['HDOUJIN_REFRESH_TOKEN'] = hdoujin_refresh_token
-    app.config['HDOUJIN_CLEARANCE_TOKEN'] = hdoujin_clearance_token
-    app.config['HDOUJIN_USER_AGENT'] = hdoujin_user_agent
-
     # 初始化 E-Hentai 工具类并存储在 app.config 中
     if 'EH_TOOLS' not in app.config:
         app.config['EH_TOOLS'] = ehentai.EHentaiTools(
@@ -325,14 +314,8 @@ def check_config(app_instance=None):
 
     eh = app.config['EH_TOOLS']
     nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)
-    hd = hdoujin.HDoujinTools(
-        session_token=app.config['HDOUJIN_SESSION_TOKEN'],
-        refresh_token=app.config['HDOUJIN_REFRESH_TOKEN'],
-        clearance_token=app.config['HDOUJIN_CLEARANCE_TOKEN'],
-        user_agent=app.config['HDOUJIN_USER_AGENT'],
-        logger=global_logger
-    )
-    app.config['HD_TOOLS'] = hd
+    
+    # E-Hentai 验证
     eh_valid, exh_valid, eh_funds = eh.is_valid_cookie()
     if eh_valid or exh_valid:
         # 预热收藏夹列表缓存
@@ -342,8 +325,13 @@ def check_config(app_instance=None):
     app.config['EH_VALID'] = eh_valid
     app.config['EXH_VALID'] = exh_valid
     update_eh_funds(eh_funds)
+    
+    # nhentai 验证
     nh_toggle = nh.is_valid_cookie()
-    hd_toggle = hd.is_valid_cookie()
+    
+    # hdoujin 设置 - 使用统一的刷新函数
+    from providers.hdoujin import refresh_and_sync_hdoujin_config
+    hd_toggle = refresh_and_sync_hdoujin_config(app.config, global_logger)
 
     # Aria2 RPC 设置
     aria2_config = config_data.get('aria2', {})
