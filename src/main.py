@@ -397,7 +397,7 @@ def check_config(app_instance=None):
         app.config['KOMGA_LIBRARY_ID'] = ''
 
     # Komga URL 索引同步设置
-    app.config['KOMGA_INDEX_SYNC_ENABLED'] = komga_config.get('index_sync', True)
+    app.config['KOMGA_INDEX_SYNC_ENABLED'] = komga_config.get('index_sync', False)
     index_sync_interval = komga_config.get('index_sync_interval', '6h')
     index_sync_interval_hours = parse_interval_to_hours(index_sync_interval)
     if index_sync_interval_hours is None:

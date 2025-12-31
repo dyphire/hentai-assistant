@@ -445,7 +445,7 @@ def update_scheduler_jobs(app):
         # 添加 Komga URL 索引同步任务
         komga_index_job_id = 'sync_komga_url_index'
         is_komga_enabled = app.config.get('KOMGA_TOGGLE', False)
-        is_index_sync_enabled = app.config.get('KOMGA_INDEX_SYNC_ENABLED', True)
+        is_index_sync_enabled = app.config.get('KOMGA_INDEX_SYNC_ENABLED', False)
         index_sync_interval = app.config.get('KOMGA_INDEX_SYNC_INTERVAL', 6)  # 默认 6 小时
         existing_komga_index_job = scheduler.get_job(komga_index_job_id)
 
