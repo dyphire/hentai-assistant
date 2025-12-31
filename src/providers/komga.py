@@ -107,6 +107,34 @@ class KomgaAPI:
             if self.logger: self.logger.error(f"Error searching book by title '{title}': {response.status_code} - {response.text}")
             return []
 
+    def get_latest_books(self, page: int = 0, size: int = 50):
+        """
+        获取最新书籍列表
+        
+        Args:
+            page: 页码（从 0 开始）
+            size: 每页数量
+        
+        Returns:
+            API 响应的 JSON 数据，包含 content 和分页信息
+        """
+        try:
+            response = self.session.get(
+                f"{self.server}/api/v1/books/latest",
+                params={"page": page, "size": size}
+            )
+            if response.status_code == 200:
+                return response.json()
+            else:
+                if self.logger:
+                    self.logger.error(f"Failed to get latest books (page {page}): {response.status_code} - {response.text}")
+                return {}
+        except Exception as e:
+            if self.logger:
+                self.logger.error(f"Exception while getting latest books: {e}")
+            return {}
+
+
     def get_collections(self, id=None, library_id=None):
         # 未提供具体 id 的情况, 获取指定 library 的所有合集
         if id == None and not library_id == None:

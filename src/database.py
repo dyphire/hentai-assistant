@@ -123,6 +123,20 @@ class TaskDatabase:
 
             conn.commit()
 
+            # 创建 Komga URL 索引表
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS komga_url_index (
+                    normalized_url TEXT PRIMARY KEY,
+                    book_id TEXT NOT NULL,
+                    original_url TEXT,
+                    site_type TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            conn.commit()
+
     def add_task(self, task_id: str, status: str = TaskStatus.IN_PROGRESS,
                  filename: Optional[str] = None, error: Optional[str] = None,
                  url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None) -> bool:
@@ -682,6 +696,189 @@ class TaskDatabase:
             except sqlite3.Error as e:
                 print(f"Database error getting H@H status changes: {e}")
                 return []
+
+    def normalize_url(self, url: str) -> tuple[str, str]:
+        """
+        规范化 URL 并识别站点类型
+        
+        Args:
+            url: 原始 URL
+        
+        Returns:
+            (normalized_url, site_type)
+        """
+        from urllib.parse import urlparse
+        
+        # 解析 URL
+        parsed = urlparse(url.lower())
+        
+        # 去除协议
+        domain = parsed.netloc or parsed.path.split('/')[0]
+        path = parsed.path if parsed.netloc else '/' + '/'.join(parsed.path.split('/')[1:])
+        
+        # 统一 exhentai 为 e-hentai
+        if 'exhentai.org' in domain:
+            domain = 'e-hentai.org'
+        
+        # 去除 www 前缀
+        domain = domain.replace('www.', '')
+        
+        # 去除尾部斜杠
+        path = path.rstrip('/')
+        
+        # 组合规范化 URL
+        normalized = f"{domain}{path}"
+        
+        # 识别站点类型
+        if 'e-hentai.org' in domain or 'exhentai.org' in domain:
+            site_type = 'e-hentai'
+        elif 'nhentai.net' in domain:
+            site_type = 'nhentai'
+        elif 'hitomi.la' in domain:
+            site_type = 'hitomi'
+        elif 'hdoujin.org' in domain:
+            site_type = 'hdoujin'
+        else:
+            site_type = 'other'
+        
+        return normalized, site_type
+
+    def upsert_komga_url_index(self, urls: List[Dict]) -> bool:
+        """
+        批量插入或更新 Komga URL 索引
+        
+        Args:
+            urls: URL 列表，每个元素包含 url, book_id, original_url, site_type
+        
+        Returns:
+            操作是否成功
+        """
+        if not urls:
+            return True
+        
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    now = datetime.now(timezone.utc).isoformat()
+                    
+                    # 准备数据
+                    data_to_upsert = []
+                    for item in urls:
+                        url = item.get('url')
+                        if not url:
+                            continue
+                        
+                        normalized_url, site_type = self.normalize_url(url)
+                        data_to_upsert.append({
+                            'normalized_url': normalized_url,
+                            'book_id': item.get('book_id'),
+                            'original_url': item.get('original_url', url),
+                            'site_type': item.get('site_type', site_type),
+                            'updated_at': now
+                        })
+                    
+                    if not data_to_upsert:
+                        return True
+                    
+                    # 批量 UPSERT
+                    conn.executemany('''
+                        INSERT INTO komga_url_index 
+                        (normalized_url, book_id, original_url, site_type, updated_at)
+                        VALUES (:normalized_url, :book_id, :original_url, :site_type, :updated_at)
+                        ON CONFLICT(normalized_url) DO UPDATE SET
+                            book_id = excluded.book_id,
+                            original_url = excluded.original_url,
+                            site_type = excluded.site_type,
+                            updated_at = excluded.updated_at
+                    ''', data_to_upsert)
+                    conn.commit()
+                return True
+            except sqlite3.Error as e:
+                print(f"Database error upserting Komga URL index: {e}")
+                return False
+
+    def check_urls_exist(self, urls: List[str]) -> Dict[str, bool]:
+        """
+        批量检查 URL 是否已存在
+        
+        Args:
+            urls: URL 列表
+        
+        Returns:
+            {normalized_url: exists}
+        """
+        if not urls:
+            return {}
+        
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    # 规范化所有 URL
+                    normalized_urls = [self.normalize_url(url)[0] for url in urls]
+                    
+                    # 构建查询
+                    placeholders = ','.join('?' for _ in normalized_urls)
+                    query = f"SELECT normalized_url FROM komga_url_index WHERE normalized_url IN ({placeholders})"
+                    
+                    cursor = conn.execute(query, normalized_urls)
+                    existing = {row[0] for row in cursor.fetchall()}
+                    
+                    # 构建结果字典
+                    result = {norm_url: norm_url in existing for norm_url in normalized_urls}
+                    return result
+            except sqlite3.Error as e:
+                print(f"Database error checking URLs exist: {e}")
+                return {url: False for url in urls}
+
+    def query_book_ids_by_urls(self, urls: List[str]) -> Dict[str, Optional[Dict]]:
+        """
+        批量查询 URL 对应的 Book ID
+        
+        Args:
+            urls: URL 列表
+        
+        Returns:
+            {normalized_url: {book_id, original_url, site_type} or None}
+        """
+        if not urls:
+            return {}
+        
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    
+                    # 规范化所有 URL
+                    url_mapping = {self.normalize_url(url)[0]: url for url in urls}
+                    normalized_urls = list(url_mapping.keys())
+                    
+                    # 构建查询
+                    placeholders = ','.join('?' for _ in normalized_urls)
+                    query = f"""
+                        SELECT normalized_url, book_id, original_url, site_type 
+                        FROM komga_url_index 
+                        WHERE normalized_url IN ({placeholders})
+                    """
+                    
+                    cursor = conn.execute(query, normalized_urls)
+                    results = {}
+                    
+                    for row in cursor.fetchall():
+                        results[row['normalized_url']] = {
+                            'book_id': row['book_id'],
+                            'original_url': row['original_url'],
+                            'site_type': row['site_type']
+                        }
+                    
+                    # 为未找到的 URL 添加 None
+                    for norm_url in normalized_urls:
+                        if norm_url not in results:
+                            results[norm_url] = None
+                    
+                    return results
+            except sqlite3.Error as e:
+                print(f"Database error querying book IDs by URLs: {e}")
+                return {self.normalize_url(url)[0]: None for url in urls}
 
 # 全局数据库实例
 task_db = TaskDatabase()

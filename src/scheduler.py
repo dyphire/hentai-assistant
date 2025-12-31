@@ -315,6 +315,42 @@ def check_hath_status_job():
         perform_hath_status_check(current_app, logger)
 
 
+def sync_komga_url_index_job():
+    """
+    定期同步 Komga URL 索引的调度任务。
+    该函数将由调度器定时调用，从 Komga 收集书籍 URL 索引。
+    """
+    with scheduler.app.app_context():
+        logger = current_app.logger
+        logger.info("定时任务触发: 开始同步 Komga URL 索引...")
+        
+        try:
+            config = current_app.config
+            port = config.get('PORT', 5001)
+            api_url = f"http://127.0.0.1:{port}/api/komga/index/collect"
+            
+            response = requests.post(api_url, timeout=300)  # 5分钟超时
+            
+            if response.status_code == 200:
+                result = response.json()
+                if result.get('success'):
+                    logger.info(
+                        f"Komga URL 索引同步成功: "
+                        f"扫描 {result.get('pages_scanned', 0)} 页, "
+                        f"新增 {result.get('total_collected', 0)} 条, "
+                        f"跳过 {result.get('total_skipped', 0)} 条"
+                    )
+                else:
+                    logger.warning(f"Komga URL 索引同步失败: {result.get('error', 'Unknown error')}")
+            else:
+                logger.error(f"调用 /api/komga/index/collect 失败: HTTP {response.status_code}")
+        
+        except requests.RequestException as e:
+            logger.error(f"调用 /api/komga/index/collect 时发生网络错误: {e}")
+        except Exception as e:
+            logger.error(f"同步 Komga URL 索引时发生错误: {e}", exc_info=True)
+
+
 def update_scheduler_jobs(app):
     """
     根据当前应用配置更新调度器中的任务。
@@ -405,6 +441,29 @@ def update_scheduler_jobs(app):
         else:
             if existing_hath_job:
                 app.logger.info("H@H 状态检查任务已禁用并移除。")
+
+        # 添加 Komga URL 索引同步任务
+        komga_index_job_id = 'sync_komga_url_index'
+        is_komga_enabled = app.config.get('KOMGA_TOGGLE', False)
+        is_index_sync_enabled = app.config.get('KOMGA_INDEX_SYNC_ENABLED', True)
+        index_sync_interval = app.config.get('KOMGA_INDEX_SYNC_INTERVAL', 6)  # 默认 6 小时
+        existing_komga_index_job = scheduler.get_job(komga_index_job_id)
+
+        if existing_komga_index_job:
+            scheduler.remove_job(komga_index_job_id)
+
+        if is_komga_enabled and is_index_sync_enabled:
+            scheduler.add_job(
+                id=komga_index_job_id,
+                func=sync_komga_url_index_job,
+                trigger='interval',
+                hours=index_sync_interval,
+                misfire_grace_time=3600  # 1小时的宽限时间
+            )
+            app.logger.info(f"Komga URL 索引同步任务已添加，将每 {index_sync_interval} 小时运行一次。")
+        else:
+            if existing_komga_index_job:
+                app.logger.info("Komga URL 索引同步任务已禁用并移除。")
 
 
 def init_scheduler(app):

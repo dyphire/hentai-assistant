@@ -39,6 +39,7 @@ from routes.task import bp as task_bp
 from routes.config import bp as config_bp
 from routes.hdoujin import bp as hdoujin_bp
 from routes.download import bp as download_bp
+from routes.komga import bp as komga_bp
 from routes.rss import rss_bp, init_rss_cache
 
 # 全局变量用于存储子进程对象
@@ -394,6 +395,15 @@ def check_config(app_instance=None):
         app.config['KOMGA_USERNAME'] = ''
         app.config['KOMGA_PASSWORD'] = ''
         app.config['KOMGA_LIBRARY_ID'] = ''
+
+    # Komga URL 索引同步设置
+    app.config['KOMGA_INDEX_SYNC_ENABLED'] = komga_config.get('index_sync', True)
+    index_sync_interval = komga_config.get('index_sync_interval', '6h')
+    index_sync_interval_hours = parse_interval_to_hours(index_sync_interval)
+    if index_sync_interval_hours is None:
+        logging.error(f"Invalid 'komga.index_sync_interval': {index_sync_interval}. Must include time unit (m/h/d). Using default 6h.")
+        index_sync_interval_hours = 6.0
+    app.config['KOMGA_INDEX_SYNC_INTERVAL'] = index_sync_interval_hours
 
     is_komga_enabled = komga_toggle
 
@@ -1207,6 +1217,7 @@ if __name__ == '__main__':
     app.register_blueprint(config_bp)
     app.register_blueprint(hdoujin_bp)
     app.register_blueprint(download_bp)
+    app.register_blueprint(komga_bp)
     app.register_blueprint(rss_bp)
 
     
