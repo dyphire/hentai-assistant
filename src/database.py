@@ -65,9 +65,25 @@ class TaskDatabase:
             columns = [row[1] for row in cursor.fetchall()]
 
             # 如果表已存在但缺少新字段，添加它们
-            for col in ("url", "mode", "favcat"):
+            for col in ("url", "mode", "favcat", "normalized_url"):
                 if col not in columns:
                     conn.execute(f'ALTER TABLE tasks ADD COLUMN {col} TEXT')
+
+            # 为 normalized_url 创建索引（如果不存在）
+            try:
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_tasks_normalized_url ON tasks(normalized_url)')
+            except sqlite3.Error:
+                pass  # 索引可能已存在
+
+            # 为历史数据填充 normalized_url
+            cursor = conn.execute('SELECT id, url FROM tasks WHERE url IS NOT NULL AND normalized_url IS NULL')
+            tasks_to_update = cursor.fetchall()
+            for task_id, url in tasks_to_update:
+                try:
+                    normalized_url, _ = self.normalize_url(url)
+                    conn.execute('UPDATE tasks SET normalized_url = ? WHERE id = ?', (normalized_url, task_id))
+                except Exception:
+                    pass  # 跳过无法规范化的 URL
 
             conn.commit()
 
@@ -142,15 +158,23 @@ class TaskDatabase:
                  url: Optional[str] = None, mode: Optional[str] = None, favcat: Optional[str] = None) -> bool:
         """添加新任务"""
         status = self.STATUS_MAP.get(status, status)
+        # 计算 normalized_url
+        normalized_url = None
+        if url:
+            try:
+                normalized_url, _ = self.normalize_url(url)
+            except Exception:
+                pass  # 如果无法规范化，保持为 None
+        
         with self.lock:
             try:
                 with self._get_conn() as conn:
                     now = datetime.now(timezone.utc).isoformat()
                     conn.execute('''
                         INSERT OR REPLACE INTO tasks
-                        (id, status, filename, error, url, mode, favcat, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ''', (task_id, status, filename, error, url, mode, favcat, now, now))
+                        (id, status, filename, error, url, mode, favcat, normalized_url, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (task_id, status, filename, error, url, mode, favcat, normalized_url, now, now))
                     conn.commit()
                 return True
             except sqlite3.Error as e:
@@ -226,6 +250,37 @@ class TaskDatabase:
                     return dict(row) if row else None
             except sqlite3.Error as e:
                 print(f"Database error getting task: {e}")
+                return None
+
+    def get_task_by_normalized_url(self, normalized_url: str) -> Optional[Dict]:
+        """
+        根据规范化 URL 获取任务
+        优先返回进行中或已完成的任务，其次是失败或取消的任务
+        """
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    conn.row_factory = sqlite3.Row
+                    # 优先查询进行中或已完成的任务
+                    cursor = conn.execute('''
+                        SELECT * FROM tasks 
+                        WHERE normalized_url = ? 
+                        ORDER BY 
+                            CASE status
+                                WHEN ? THEN 1  -- 进行中优先级最高
+                                WHEN ? THEN 2  -- 已完成次之
+                                WHEN ? THEN 3  -- 取消
+                                WHEN ? THEN 4  -- 失败
+                                ELSE 5
+                            END,
+                            created_at DESC
+                        LIMIT 1
+                    ''', (normalized_url, TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED, 
+                          TaskStatus.CANCELLED, TaskStatus.ERROR))
+                    row = cursor.fetchone()
+                    return dict(row) if row else None
+            except sqlite3.Error as e:
+                print(f"Database error getting task by normalized URL: {e}")
                 return None
 
     def get_tasks(self, status_filter: Optional[str] = None, page: int = 1,
