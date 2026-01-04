@@ -1087,12 +1087,6 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
                     if favorite_favcat and str(favorite_favcat) != str(favcat):
                         if logger: logger.info(f"Favorite record found for gid {gid} with a different favcat. Updating from {favorite_favcat} to {favcat}.")
                         task_db.update_favorite_favcat(gid, str(favcat))
-
-                    if not favorite_record.get('downloaded'):
-                        if logger: logger.info(f"Favorite record found for gid {gid}, marking as downloaded.")
-                        task_db.mark_favorite_as_downloaded(gid)
-                    else:
-                        if logger: logger.info(f"Favorite record for gid {gid} is already marked as downloaded.")
                 else:
                     if logger: logger.info(f"No favorite record found for gid {gid}. Adding to online and local favorites.")
                     token = gmetadata.get('token')
@@ -1100,8 +1094,9 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
                         # 只有 EHentaiTools 才有 add_to_favorites 方法
                         if app.config['EH_TOOLS'] and hasattr(app.config['EH_TOOLS'], 'add_to_favorites'):
                             if app.config['EH_TOOLS'].add_to_favorites(gid=gid, token=token, favcat=str(favcat)):
-                                # 添加到线上成功后，同步到本地数据库并标记为已下载
+                                # 添加到线上成功后，同步到本地数据库
                                 # title 存储从 ComicInfo 提取的标题（Komga 标题）
+                                # downloaded 字段会在下次同步时由 trigger_undownloaded_favorites_download 标记
                                 title = comicinfo_metadata.get('Title') if comicinfo_metadata else None
                                 
                                 fav_data = [{
@@ -1110,8 +1105,7 @@ def download_gallery_task(url, mode, task_id, logger=None, favcat=False, tasks=N
                                     'favcat': str(favcat)
                                 }]
                                 task_db.add_eh_favorites(fav_data)
-                                task_db.mark_favorite_as_downloaded(gid)
-                                if logger: logger.info(f"Successfully added and marked gid {gid} as a local favorite.")
+                                if logger: logger.info(f"Successfully added gid {gid} as a local favorite.")
                             else:
                                 if logger: logger.error(f"Failed to add gid {gid} to online favorites.")
                         else:

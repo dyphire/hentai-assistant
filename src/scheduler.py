@@ -56,6 +56,10 @@ def trigger_undownloaded_favorites_download(logger=None, config=None):
             
             if response.status_code == 202:
                 logger.info(f"成功为 {url} 创建下载任务。")
+                # 立即标记为已下载,避免下次同步时重复触发
+                # 失败任务的重试由用户在任务列表中手动处理
+                task_db.mark_favorite_as_downloaded(gid)
+                logger.info(f"已标记 GID {gid} 为已下载状态。")
                 success_count += 1
             else:
                 logger.error(f"为 {url} 创建下载任务失败: {response.status_code} - {response.text}")
