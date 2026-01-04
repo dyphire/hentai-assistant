@@ -67,7 +67,8 @@
 
     <div v-if="submitting" class="info-message">提交中...</div>
     <div v-if="submitSuccess" class="success-message">
-      任务提交成功！任务ID: {{ taskId }}。
+      {{ submitMessage }}
+      任务ID: {{ taskId }}。
       <router-link to="/tasks">查看任务列表</router-link>
     </div>
     <div v-if="submitError" class="error-message">提交失败: {{ submitError }}</div>
@@ -84,6 +85,7 @@ const submitting = ref(false);
 const submitSuccess = ref(false);
 const submitError = ref<string | null>(null);
 const taskId = ref<string | null>(null);
+const submitMessage = ref<string>(''); // 新增：用于显示详细的提交信息
 
 // 下载模式下拉菜单
 const isDropdownOpen = ref(false);
@@ -181,6 +183,7 @@ const submitDownload = async () => {
   submitSuccess.value = false;
   submitError.value = null;
   taskId.value = null;
+  submitMessage.value = '';
 
   try {
     const params: { url: string; mode: string; fav?: string } = {
@@ -194,10 +197,35 @@ const submitDownload = async () => {
     }
     
     const response = await axios.get(`${API_BASE_URL}/download`, { params });
-    submitSuccess.value = true;
-    taskId.value = response.data.task_id;
-    url.value = ''; // 清空输入
-    // 保持下载模式选择，不重置
+    
+    // 根据状态码和响应内容显示不同的消息
+    if (response.status === 200) {
+      // 任务已存在（已完成或进行中）
+      submitSuccess.value = true;
+      taskId.value = response.data.task_id;
+      
+      if (response.data.reason === 'already_completed') {
+        submitMessage.value = '该任务已完成，无需重复下载。';
+      } else if (response.data.reason === 'in_progress') {
+        submitMessage.value = '该任务正在进行中。';
+      } else {
+        submitMessage.value = '任务已存在。';
+      }
+    } else if (response.status === 202) {
+      // 任务已创建或重试
+      submitSuccess.value = true;
+      taskId.value = response.data.task_id;
+      
+      if (response.data.retried) {
+        // 自动重试
+        submitMessage.value = `检测到之前的任务失败，已自动重试。`;
+      } else {
+        // 新建任务
+        submitMessage.value = '任务提交成功！';
+      }
+      
+      url.value = ''; // 只有新建或重试任务时才清空输入
+    }
   } catch (err: any) {
     submitError.value = err.response?.data?.error || '提交下载任务失败。';
     console.error(err);
