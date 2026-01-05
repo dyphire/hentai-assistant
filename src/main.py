@@ -41,6 +41,7 @@ from routes.hdoujin import bp as hdoujin_bp
 from routes.download import bp as download_bp
 from routes.komga import bp as komga_bp
 from routes.rss import rss_bp, init_rss_cache
+from routes.scheduler import bp as scheduler_bp
 
 # 全局变量用于存储子进程对象
 notification_process = None
@@ -1213,6 +1214,7 @@ if __name__ == '__main__':
     app.register_blueprint(download_bp)
     app.register_blueprint(komga_bp)
     app.register_blueprint(rss_bp)
+    app.register_blueprint(scheduler_bp)
 
     
     # 仅在主工作进程中执行一次性初始化，以避免 reloader 重复执行
