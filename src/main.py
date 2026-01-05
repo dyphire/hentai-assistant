@@ -384,11 +384,23 @@ def check_config(app_instance=None):
                 global_logger.info("Komga API 连接成功")
                 komga_toggle = True
             else:
-                komga_toggle = False
-                global_logger.error("Komga API 连接异常, 相关功能将不可用")
+                # 连接失败时，如果之前是启用的，保持启用状态
+                previous_toggle = app_instance.config.get('KOMGA_TOGGLE', False)
+                if previous_toggle:
+                    global_logger.warning("Komga API 连接异常，但保持功能启用（之前状态为启用）")
+                    komga_toggle = True
+                else:
+                    komga_toggle = False
+                    global_logger.error("Komga API 连接异常, 相关功能将不可用")
         except Exception as e:
-            global_logger.error(f"Komga API 连接异常: {e}")
-            komga_toggle = False
+            # 连接异常时，如果之前是启用的，保持启用状态
+            previous_toggle = app_instance.config.get('KOMGA_TOGGLE', False)
+            if previous_toggle:
+                global_logger.warning(f"Komga API 连接异常: {e}，但保持功能启用（之前状态为启用）")
+                komga_toggle = True
+            else:
+                global_logger.error(f"Komga API 连接异常: {e}")
+                komga_toggle = False
     else:
         global_logger.info("Komga API 功能未启用")
         komga_toggle = False
@@ -475,9 +487,8 @@ def check_config(app_instance=None):
         except json.JSONDecodeError:
             global_logger.error("从数据库加载 eh_funds 失败：无效的 JSON 格式")
 
-    # 仅在主工作进程中更新调度器任务
-    if not app.debug or os.environ.get("WERKZEUG_RUN_MAIN") == 'true':
-        update_scheduler_jobs(app)
+    # 更新调度器任务（配置更新时总是需要更新）
+    update_scheduler_jobs(app_instance)
 
 def get_eh_mode(config, mode):
     aria2_enabled = config.get('ARIA2_TOGGLE', False)

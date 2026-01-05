@@ -464,10 +464,10 @@ def update_scheduler_jobs(app):
                 hours=index_sync_interval,
                 misfire_grace_time=3600  # 1小时的宽限时间
             )
-            app.logger.info(f"Komga URL 索引同步任务已添加，将每 {index_sync_interval} 小时运行一次。")
+            app.logger.info(f"Komga URL 索引同步任务已添加，将每 {index_sync_interval} 小时运行一次")
         else:
             if existing_komga_index_job:
-                app.logger.info("Komga URL 索引同步任务已禁用并移除。")
+                app.logger.info("Komga URL 索引同步任务已禁用并移除")
 
 
 def init_scheduler(app):
