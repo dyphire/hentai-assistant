@@ -107,6 +107,8 @@ class Aria2RPC:
         last_log_time = 0  # 上次记录日志的时间
         first_error_time = None  # 首次 API 错误时间
         max_error_duration = 3600  # 最大容忍 API 错误时长(秒),默认1小时
+        elapsed_time = 0  # 无进度累计时间(用于判断死种)
+        elapsed_time_2 = 0  # 无速度累计时间(用于判断死种)
 
         while True:
             # 检查任务是否被用户取消
@@ -212,12 +214,34 @@ class Aria2RPC:
                     time.sleep(5)
                     return result['result']['files'][0]['path']
 
-                # 任务失败或被移除 - 这是唯一判定失败的条件
+                # 任务失败或被移除
                 if status in ['removed', 'error']:
                     if logger:
                         error_msg = result['result'].get('errorMessage', 'Unknown error')
                         logger.error(f"Aria2 任务失败: status={status}, error={error_msg}")
                     return None
+
+                # 判断死种: 5分钟无进度
+                if completelen == 0:
+                    elapsed_time += 5
+                    if elapsed_time >= 300:
+                        if logger:
+                            logger.warning("No progress for 5 minutes, removing task.")
+                        self.remove(gid)
+                        return None
+                else:
+                    elapsed_time = 0  # 有进度则重置计时器
+
+                # 判断死种: 2小时无速度
+                if download_speed == 0:
+                    elapsed_time_2 += 5
+                    if elapsed_time_2 >= 7200:
+                        if logger:
+                            logger.warning("No speed for 2 hours, removing task.")
+                        self.remove(gid)
+                        return None
+                else:
+                    elapsed_time_2 = 0  # 有速度则重置计时器
 
                 # 其他状态(active, waiting, paused)继续监听
                 time.sleep(5)
