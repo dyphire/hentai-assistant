@@ -231,38 +231,38 @@ def check_config(app_instance=None):
 
     # 通用设置
     general = config_data.get('general', {})
-    app.config['PORT'] = int(general.get('port', 5001))
-    app.config['KEEP_TORRENTS'] = general.get('keep_torrents', False)
-    app.config['KEEP_ORIGINAL_FILE'] = general.get('keep_original_file', False)
-    app.config['PREFER_JAPANESE_TITLE'] = general.get('prefer_japanese_title', True)
-    app.config['MOVE_PATH'] = str(general.get('move_path', '')).rstrip('/') or None
+    app_instance.config['PORT'] = int(general.get('port', 5001))
+    app_instance.config['KEEP_TORRENTS'] = general.get('keep_torrents', False)
+    app_instance.config['KEEP_ORIGINAL_FILE'] = general.get('keep_original_file', False)
+    app_instance.config['PREFER_JAPANESE_TITLE'] = general.get('prefer_japanese_title', True)
+    app_instance.config['MOVE_PATH'] = str(general.get('move_path', '')).rstrip('/') or None
 
     # 高级设置
     advanced = config_data.get('advanced', {})
-    app.config['TAGS_TRANSLATION'] = advanced.get('tags_translation', False)
-    app.config['REMOVE_ADS'] = advanced.get('remove_ads', False)
-    app.config['AGGRESSIVE_SERIES_DETECTION'] = advanced.get('aggressive_series_detection', False)
-    app.config['OPENAI_SERIES_DETECTION'] = advanced.get('openai_series_detection', False)
-    app.config['PREFER_OPENAI_SERIES'] = advanced.get('prefer_openai_series', False)
+    app_instance.config['TAGS_TRANSLATION'] = advanced.get('tags_translation', False)
+    app_instance.config['REMOVE_ADS'] = advanced.get('remove_ads', False)
+    app_instance.config['AGGRESSIVE_SERIES_DETECTION'] = advanced.get('aggressive_series_detection', False)
+    app_instance.config['OPENAI_SERIES_DETECTION'] = advanced.get('openai_series_detection', False)
+    app_instance.config['PREFER_OPENAI_SERIES'] = advanced.get('prefer_openai_series', False)
 
     # E-Hentai 设置
     ehentai_config = config_data.get('ehentai', {})
-    app.config['EH_IPB_MEMBER_ID'] = ehentai_config.get('ipb_member_id', '')
-    app.config['EH_IPB_PASS_HASH'] = ehentai_config.get('ipb_pass_hash', '')
+    app_instance.config['EH_IPB_MEMBER_ID'] = ehentai_config.get('ipb_member_id', '')
+    app_instance.config['EH_IPB_PASS_HASH'] = ehentai_config.get('ipb_pass_hash', '')
 
     # E-Hentai 收藏夹同步设置 (扁平化结构)
-    app.config['EH_FAV_SYNC_ENABLED'] = ehentai_config.get('favorite_sync', False)
+    app_instance.config['EH_FAV_SYNC_ENABLED'] = ehentai_config.get('favorite_sync', False)
     # 解析 favorite_sync_interval 配置并转换为小时数（保持浮点数以支持分钟级精度）
     fav_interval = ehentai_config.get('favorite_sync_interval', '6h')
     interval_hours = parse_interval_to_hours(fav_interval)
     if interval_hours is None:
         logging.error(f"Invalid 'ehentai.favorite_sync_interval': {fav_interval}. Must include time unit (m/h/d). Using default 6h.")
         interval_hours = 6.0
-    app.config['EH_FAV_SYNC_INTERVAL'] = interval_hours
-    app.config['EH_FAV_AUTO_DOWNLOAD'] = ehentai_config.get('auto_download_favorites', False)
+    app_instance.config['EH_FAV_SYNC_INTERVAL'] = interval_hours
+    app_instance.config['EH_FAV_AUTO_DOWNLOAD'] = ehentai_config.get('auto_download_favorites', False)
 
     # H@H 监控设置
-    app.config['HATH_CHECK_ENABLED'] = ehentai_config.get('hath_check_enabled', False)
+    app_instance.config['HATH_CHECK_ENABLED'] = ehentai_config.get('hath_check_enabled', False)
     # 解析 hath_check_interval 并转换为分钟数
     hath_interval = ehentai_config.get('hath_check_interval', '30m')
     hath_interval_hours = parse_interval_to_hours(hath_interval)
@@ -275,47 +275,47 @@ def check_config(app_instance=None):
     if hath_interval_minutes < 5:
         logging.warning(f"'ehentai.hath_check_interval' too small ({hath_interval_minutes:.2f} minutes), setting to minimum 5 minutes.")
         hath_interval_minutes = 5
-    app.config['HATH_CHECK_INTERVAL'] = int(hath_interval_minutes)
+    app_instance.config['HATH_CHECK_INTERVAL'] = int(hath_interval_minutes)
 
     # 首次扫描页数：0 表示全量扫描，其他数字表示扫描指定页数
     try:
         initial_scan_pages = int(ehentai_config.get('initial_scan_pages', 1))
-        app.config['EH_FAV_INITIAL_SCAN_PAGES'] = max(0, initial_scan_pages)  # 确保非负数
+        app_instance.config['EH_FAV_INITIAL_SCAN_PAGES'] = max(0, initial_scan_pages)  # 确保非负数
     except (ValueError, TypeError):
-        app.config['EH_FAV_INITIAL_SCAN_PAGES'] = 1
+        app_instance.config['EH_FAV_INITIAL_SCAN_PAGES'] = 1
         logging.warning("Invalid 'ehentai.initial_scan_pages'. Falling back to default 1 page.")
 
     # favcat_whitelist 支持空列表 (所有), 或 [0,1,2] (特定)
     favcat_whitelist = ehentai_config.get('favcat_whitelist', [])
     if not favcat_whitelist or favcat_whitelist == []:
-        app.config['EH_FAV_SYNC_FAVCAT'] = list(map(str, range(10)))  # 空列表对应 0-9
+        app_instance.config['EH_FAV_SYNC_FAVCAT'] = list(map(str, range(10)))  # 空列表对应 0-9
     else:
         # 将列表中的元素转换为字符串
-        app.config['EH_FAV_SYNC_FAVCAT'] = [str(cat).strip() for cat in favcat_whitelist]
+        app_instance.config['EH_FAV_SYNC_FAVCAT'] = [str(cat).strip() for cat in favcat_whitelist]
     
 
     # nhentai 设置
     nhentai_config = config_data.get('nhentai', {})
     nhentai_cookie = nhentai_config.get('cookie', '')
-    app.config['NHENTAI_COOKIE'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
+    app_instance.config['NHENTAI_COOKIE'] = {"cookie": nhentai_cookie} if nhentai_cookie else {"cookie": ""}
 
     # 初始化 E-Hentai 工具类并存储在 app.config 中
     if 'EH_TOOLS' not in app.config:
-        app.config['EH_TOOLS'] = ehentai.EHentaiTools(
-            ipb_member_id=app.config['EH_IPB_MEMBER_ID'],
-            ipb_pass_hash=app.config['EH_IPB_PASS_HASH'],
+        app_instance.config['EH_TOOLS'] = ehentai.EHentaiTools(
+            ipb_member_id=app_instance.config['EH_IPB_MEMBER_ID'],
+            ipb_pass_hash=app_instance.config['EH_IPB_PASS_HASH'],
             logger=global_logger
         )
     else:
         # 如果已存在，重新创建实例以应用新配置
-        app.config['EH_TOOLS'] = ehentai.EHentaiTools(
-            ipb_member_id=app.config['EH_IPB_MEMBER_ID'],
-            ipb_pass_hash=app.config['EH_IPB_PASS_HASH'],
+        app_instance.config['EH_TOOLS'] = ehentai.EHentaiTools(
+            ipb_member_id=app_instance.config['EH_IPB_MEMBER_ID'],
+            ipb_pass_hash=app_instance.config['EH_IPB_PASS_HASH'],
             logger=global_logger
         )
 
-    eh = app.config['EH_TOOLS']
-    nh = nhentai.NHentaiTools(cookie=app.config['NHENTAI_COOKIE'], logger=global_logger)
+    eh = app_instance.config['EH_TOOLS']
+    nh = nhentai.NHentaiTools(cookie=app_instance.config['NHENTAI_COOKIE'], logger=global_logger)
     
     # E-Hentai 验证
     eh_valid, exh_valid, eh_funds = eh.is_valid_cookie()
@@ -324,8 +324,8 @@ def check_config(app_instance=None):
         global_logger.info("正在预获取 E-Hentai 收藏夹列表...")
         eh.get_favcat_list()
     # 更新 E-Hentai 和 ExHentai 验证状态
-    app.config['EH_VALID'] = eh_valid
-    app.config['EXH_VALID'] = exh_valid
+    app_instance.config['EH_VALID'] = eh_valid
+    app_instance.config['EXH_VALID'] = exh_valid
     update_eh_funds(eh_funds)
     
     # nhentai 验证
@@ -341,12 +341,12 @@ def check_config(app_instance=None):
 
     if aria2_enable:
         global_logger.info("开始测试 Aria2 RPC 的连接")
-        app.config['ARIA2_SERVER'] = str(aria2_config.get('server', '')).rstrip('/')
-        app.config['ARIA2_TOKEN'] = str(aria2_config.get('token', ''))
-        app.config['ARIA2_DOWNLOAD_DIR'] = str(aria2_config.get('download_dir', '')).rstrip('/') or None
-        app.config['REAL_DOWNLOAD_DIR'] = str(aria2_config.get('mapped_dir', '')).rstrip('/') or app.config['ARIA2_DOWNLOAD_DIR']
+        app_instance.config['ARIA2_SERVER'] = str(aria2_config.get('server', '')).rstrip('/')
+        app_instance.config['ARIA2_TOKEN'] = str(aria2_config.get('token', ''))
+        app_instance.config['ARIA2_DOWNLOAD_DIR'] = str(aria2_config.get('download_dir', '')).rstrip('/') or None
+        app_instance.config['REAL_DOWNLOAD_DIR'] = str(aria2_config.get('mapped_dir', '')).rstrip('/') or app_instance.config['ARIA2_DOWNLOAD_DIR']
 
-        rpc = aria2.Aria2RPC(url=app.config['ARIA2_SERVER'], token=app.config['ARIA2_TOKEN'], logger=global_logger)
+        rpc = aria2.Aria2RPC(url=app_instance.config['ARIA2_SERVER'], token=app_instance.config['ARIA2_TOKEN'], logger=global_logger)
         try:
             result = rpc.get_global_stat()
             if 'result' in result:
@@ -361,10 +361,10 @@ def check_config(app_instance=None):
     else:
         global_logger.info("Aria2 RPC 功能未启用")
         aria2_toggle = False
-        app.config['ARIA2_SERVER'] = ''
-        app.config['ARIA2_TOKEN'] = ''
-        app.config['ARIA2_DOWNLOAD_DIR'] = None
-        app.config['REAL_DOWNLOAD_DIR'] = None
+        app_instance.config['ARIA2_SERVER'] = ''
+        app_instance.config['ARIA2_TOKEN'] = ''
+        app_instance.config['ARIA2_DOWNLOAD_DIR'] = None
+        app_instance.config['REAL_DOWNLOAD_DIR'] = None
 
     # Komga API 设置
     komga_config = config_data.get('komga', {})
@@ -372,14 +372,14 @@ def check_config(app_instance=None):
 
     if komga_enable:
         global_logger.info("开始测试 Komga API 的连接")
-        app.config['KOMGA_SERVER'] = str(komga_config.get('server', '')).rstrip('/')
-        app.config['KOMGA_USERNAME'] = str(komga_config.get('username', ''))
-        app.config['KOMGA_PASSWORD'] = str(komga_config.get('password', ''))
-        app.config['KOMGA_LIBRARY_ID'] = str(komga_config.get('library_id', ''))
+        app_instance.config['KOMGA_SERVER'] = str(komga_config.get('server', '')).rstrip('/')
+        app_instance.config['KOMGA_USERNAME'] = str(komga_config.get('username', ''))
+        app_instance.config['KOMGA_PASSWORD'] = str(komga_config.get('password', ''))
+        app_instance.config['KOMGA_LIBRARY_ID'] = str(komga_config.get('library_id', ''))
 
-        kmg = komga.KomgaAPI(server=app.config['KOMGA_SERVER'], username=app.config['KOMGA_USERNAME'], password=app.config['KOMGA_PASSWORD'],  logger=global_logger)
+        kmg = komga.KomgaAPI(server=app_instance.config['KOMGA_SERVER'], username=app_instance.config['KOMGA_USERNAME'], password=app_instance.config['KOMGA_PASSWORD'],  logger=global_logger)
         try:
-            library = kmg.get_libraries(library_id=app.config['KOMGA_LIBRARY_ID'])
+            library = kmg.get_libraries(library_id=app_instance.config['KOMGA_LIBRARY_ID'])
             if library.status_code == 200:
                 global_logger.info("Komga API 连接成功")
                 komga_toggle = True
@@ -404,19 +404,19 @@ def check_config(app_instance=None):
     else:
         global_logger.info("Komga API 功能未启用")
         komga_toggle = False
-        app.config['KOMGA_SERVER'] = ''
-        app.config['KOMGA_USERNAME'] = ''
-        app.config['KOMGA_PASSWORD'] = ''
-        app.config['KOMGA_LIBRARY_ID'] = ''
+        app_instance.config['KOMGA_SERVER'] = ''
+        app_instance.config['KOMGA_USERNAME'] = ''
+        app_instance.config['KOMGA_PASSWORD'] = ''
+        app_instance.config['KOMGA_LIBRARY_ID'] = ''
 
     # Komga URL 索引同步设置
-    app.config['KOMGA_INDEX_SYNC_ENABLED'] = komga_config.get('index_sync', False)
+    app_instance.config['KOMGA_INDEX_SYNC_ENABLED'] = komga_config.get('index_sync', False)
     index_sync_interval = komga_config.get('index_sync_interval', '6h')
     index_sync_interval_hours = parse_interval_to_hours(index_sync_interval)
     if index_sync_interval_hours is None:
         logging.error(f"Invalid 'komga.index_sync_interval': {index_sync_interval}. Must include time unit (m/h/d). Using default 6h.")
         index_sync_interval_hours = 6.0
-    app.config['KOMGA_INDEX_SYNC_INTERVAL'] = index_sync_interval_hours
+    app_instance.config['KOMGA_INDEX_SYNC_INTERVAL'] = index_sync_interval_hours
 
     is_komga_enabled = komga_toggle
 
@@ -453,7 +453,7 @@ def check_config(app_instance=None):
     
     # 将检查结果作为 'enable' 键添加到字典中
     notification_config['enable'] = is_any_notifier_enabled
-    app.config['NOTIFICATION'] = notification_config
+    app_instance.config['NOTIFICATION'] = notification_config
 
     if is_any_notifier_enabled:
         global_logger.info("通知服务功能已启用 (至少有一个通知器处于开启状态)")
@@ -462,33 +462,35 @@ def check_config(app_instance=None):
         
     # Openai 设置
     openai_config = config_data.get('openai', {})
-    app.config['OPENAI_API_KEY'] = str(openai_config.get('api_key', '')).strip()
-    app.config['OPENAI_BASE_URL'] = str(openai_config.get('base_url', '')).strip().rstrip('/')
-    app.config['OPENAI_MODEL'] = str(openai_config.get('model', '')).strip()
-    if app.config['OPENAI_API_KEY'] and app.config['OPENAI_BASE_URL'] and app.config['OPENAI_MODEL']:
+    app_instance.config['OPENAI_API_KEY'] = str(openai_config.get('api_key', '')).strip()
+    app_instance.config['OPENAI_BASE_URL'] = str(openai_config.get('base_url', '')).strip().rstrip('/')
+    app_instance.config['OPENAI_MODEL'] = str(openai_config.get('model', '')).strip()
+    if app_instance.config['OPENAI_API_KEY'] and app_instance.config['OPENAI_BASE_URL'] and app_instance.config['OPENAI_MODEL']:
         global_logger.info("OpenAI 配置已设置")
-        app.config['OPENAI_TOGGLE'] = True
+        app_instance.config['OPENAI_TOGGLE'] = True
     else:
 
-        app.config['OPENAI_TOGGLE'] = False
+        app_instance.config['OPENAI_TOGGLE'] = False
     
     # ComicInfo 设置
-    app.config['COMICINFO'] = config_data.get('comicinfo', {})
+    app_instance.config['COMICINFO'] = config_data.get('comicinfo', {})
 
-    eh_translator = EhTagTranslator(enable_translation=app.config.get('TAGS_TRANSLATION', True))
-    metadata_extractor = MetadataExtractor(app.config, eh_translator)
+    eh_translator = EhTagTranslator(enable_translation=app_instance.config.get('TAGS_TRANSLATION', True))
+    metadata_extractor = MetadataExtractor(app_instance.config, eh_translator)
 
     # 从数据库加载 eh_funds
     eh_funds_json = task_db.get_global_state('eh_funds')
     if eh_funds_json:
         try:
-            app.config['EH_FUNDS'] = json.loads(eh_funds_json)
-            global_logger.debug(f"从数据库加载 eh_funds: {app.config['EH_FUNDS']}")
+            app_instance.config['EH_FUNDS'] = json.loads(eh_funds_json)
+            global_logger.debug(f"从数据库加载 eh_funds: {app_instance.config['EH_FUNDS']}")
         except json.JSONDecodeError:
             global_logger.error("从数据库加载 eh_funds 失败：无效的 JSON 格式")
 
     # 更新调度器任务（配置更新时总是需要更新）
+    global_logger.info("准备调用 update_scheduler_jobs...")
     update_scheduler_jobs(app_instance)
+    global_logger.info("update_scheduler_jobs 调用完成")
 
 def get_eh_mode(config, mode):
     aria2_enabled = config.get('ARIA2_TOGGLE', False)
