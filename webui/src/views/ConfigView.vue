@@ -11,20 +11,37 @@
     <div v-else-if="error" class="error-message">{{ error }}</div>
     <div v-else>
       <div v-if="activeTab === 'general'">
+        <!-- 配置标签导航 -->
+        <div class="config-tabs">
+          <button
+            v-for="tab in configTabs"
+            :key="tab.id"
+            @click="switchConfigTab(tab.id)"
+            :class="['tab-button', { active: activeConfigTab === tab.id }]"
+          >
+            {{ tab.label }}
+          </button>
+        </div>
+
+        <!-- 配置表单 -->
         <form @submit.prevent="saveConfig">
-          <div v-for="section in orderedConfigSections" :key="section.name" class="config-section">
-            <h2>{{ section.name }}</h2>
-            <div>
-              <div v-for="field in section.orderedFields" :key="field.key" class="config-item">
-                <label :for="`${section.name}-${field.key}`">{{ field.key }}:</label>
-                <input
-                  :id="`${section.name}-${field.key}`"
-                  v-model="(editableConfig[section.name] as ConfigItem)[field.key]"
-                  type="text"
-                />
+          <Transition name="fade" mode="out-in">
+            <div :key="activeConfigTab" class="tab-content">
+              <div v-for="section in currentTabSections" :key="section.name" class="config-section">
+                <h2>{{ section.name }}</h2>
+                <div>
+                  <div v-for="field in section.orderedFields" :key="field.key" class="config-item">
+                    <label :for="`${section.name}-${field.key}`">{{ field.key }}:</label>
+                    <input
+                      :id="`${section.name}-${field.key}`"
+                      v-model="(editableConfig[section.name] as ConfigItem)[field.key]"
+                      type="text"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
-          </div>
+          </Transition>
           <button type="submit" :disabled="saving">保存配置</button>
           <div v-if="saving">保存中...</div>
           <div v-if="saveSuccess" class="success-message">配置保存成功！正在重新检查服务状态...</div>
@@ -82,8 +99,33 @@ const saveSuccess = ref(false);
 const saveError = ref<string | null>(null);
 const { isDark } = useTheme();
 const activeTab = ref('general');
+const activeConfigTab = ref('basic');
 
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
+
+// 配置标签定义
+const configTabs = [
+  {
+    id: 'basic',
+    label: '基础配置',
+    sections: ['general', 'advanced']
+  },
+  {
+    id: 'sites',
+    label: '站点配置',
+    sections: ['ehentai', 'nhentai', 'hdoujin']
+  },
+  {
+    id: 'integrations',
+    label: '集成服务',
+    sections: ['aria2', 'komga', 'openai']
+  },
+  {
+    id: 'others',
+    label: '其他配置',
+    sections: ['comicinfo']
+  }
+];
 
 const orderedConfigSections = computed(() => {
   return Object.entries(config.value)
@@ -99,6 +141,19 @@ const orderedConfigSections = computed(() => {
       }
     })
 });
+
+// 当前标签的配置sections
+const currentTabSections = computed(() => {
+  const tab = configTabs.find(t => t.id === activeConfigTab.value);
+  return orderedConfigSections.value.filter(section => 
+    tab?.sections.includes(section.name)
+  );
+});
+
+// 切换配置标签
+const switchConfigTab = (tabId: string) => {
+  activeConfigTab.value = tabId;
+};
 
 const fetchConfig = async () => {
   loading.value = true;
@@ -187,6 +242,63 @@ onMounted(fetchConfig);
     border-bottom-color: #007bff; /* Change underline to highlight color */
 }
 
+/* 配置标签导航 */
+.config-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 24px;
+  border-bottom: 2px solid #e9ecef;
+  padding-bottom: 0;
+}
+
+.tab-button {
+  padding: 12px 24px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 500;
+  color: #6c757d;
+  border-bottom: 3px solid transparent;
+  margin-bottom: -2px;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  border-radius: 8px 8px 0 0;
+  position: relative;
+}
+
+.tab-button:hover {
+  color: #007bff;
+  background: rgba(0, 123, 255, 0.08);
+}
+
+.tab-button.active {
+  color: #007bff;
+  border-bottom-color: #007bff;
+  font-weight: 600;
+  background: rgba(0, 123, 255, 0.05);
+}
+
+/* 标签内容动画 */
+.tab-content {
+  min-height: 200px;
+}
+
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.fade-enter-from {
+  opacity: 0;
+  transform: translateY(10px);
+}
+
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(-10px);
+}
+
 .config-view {
   padding: 20px;
   max-width: 800px;
@@ -202,10 +314,12 @@ h1 {
 
 h2 {
   color: #555;
-  border-bottom: 1px solid #eee;
-  padding-bottom: 5px;
-  margin-top: 20px;
-  margin-bottom: 15px;
+  border-bottom: 2px solid #e9ecef;
+  padding-bottom: 8px;
+  margin-top: 0;
+  margin-bottom: 20px;
+  font-size: 18px;
+  font-weight: 600;
 }
 
 .config-section {
@@ -430,6 +544,26 @@ button:disabled {
   border-bottom-color: rgba(255, 255, 255, 0.12);
 }
 */
+
+/* 深色模式下的配置标签 */
+.dark .config-tabs {
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+.dark .tab-button {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.dark .tab-button:hover {
+  color: var(--primary-color);
+  background: rgba(0, 123, 255, 0.15);
+}
+
+.dark .tab-button.active {
+  color: var(--primary-color);
+  border-bottom-color: var(--primary-color);
+  background: rgba(0, 123, 255, 0.1);
+}
 
 .dark .tabs button {
   color: var(--text-color-light);
