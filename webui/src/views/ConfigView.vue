@@ -30,9 +30,21 @@
               <div v-for="section in currentTabSections" :key="section.name" class="config-section">
                 <h2>{{ section.name }}</h2>
                 <div>
-                  <div v-for="field in section.orderedFields" :key="field.key" class="config-item">
+                  <div v-for="field in section.orderedFields" :key="field.key" class="config-item" :class="{ 'config-item-inline': isBooleanField(section.name, field.key) }">
                     <label :for="`${section.name}-${field.key}`">{{ field.key }}:</label>
+                    <!-- 布尔型字段使用拨杆开关 -->
+                    <label v-if="isBooleanField(section.name, field.key)" class="toggle-switch">
+                      <input
+                        type="checkbox"
+                        :id="`${section.name}-${field.key}`"
+                        :checked="isBooleanTrue(section.name, field.key)"
+                        @change="toggleBoolean(section.name, field.key)"
+                      />
+                      <span class="toggle-slider"></span>
+                    </label>
+                    <!-- 非布尔型字段使用文本输入 -->
                     <input
+                      v-else
                       :id="`${section.name}-${field.key}`"
                       v-model="(editableConfig[section.name] as ConfigItem)[field.key]"
                       type="text"
@@ -102,6 +114,39 @@ const activeTab = ref('general');
 const activeConfigTab = ref('basic');
 
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
+
+// 定义布尔类型的配置字段
+const booleanFields: Record<string, string[]> = {
+  general: ['keep_torrents', 'keep_original_file', 'prefer_japanese_title'],
+  advanced: ['tags_translation', 'remove_ads', 'aggressive_series_detection', 'openai_series_detection', 'prefer_openai_series'],
+  ehentai: ['favorite_sync', 'auto_download_favorites', 'hath_check_enabled'],
+  aria2: ['enable'],
+  komga: ['enable', 'index_sync']
+};
+
+// 判断字段是否为布尔类型
+const isBooleanField = (section: string, key: string): boolean => {
+  return booleanFields[section]?.includes(key) ?? false;
+};
+
+// 判断布尔字段当前值是否为 true
+const isBooleanTrue = (section: string, key: string): boolean => {
+  const value = (editableConfig.value[section] as ConfigItem)?.[key];
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'string') {
+    return ['true', 'yes', 'on', '1'].includes(value.toLowerCase());
+  }
+  return false;
+};
+
+// 切换布尔字段值
+const toggleBoolean = (section: string, key: string) => {
+  const sectionData = editableConfig.value[section] as ConfigItem;
+  if (sectionData) {
+    const currentValue = isBooleanTrue(section, key);
+    sectionData[key] = currentValue ? 'false' : 'true';
+  }
+};
 
 // 配置标签定义
 const configTabs = [
@@ -389,6 +434,73 @@ h2 {
   background-color: #fefefe;
 }
 
+/* 布尔型配置项行内布局 */
+.config-item-inline {
+  flex-direction: row !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config-item-inline label:first-child {
+  margin-bottom: 0;
+}
+
+/* 拨杆开关样式 */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.toggle-switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+  position: absolute;
+}
+
+.toggle-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  border-radius: 24px;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.toggle-slider::before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  border-radius: 50%;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.toggle-switch input:checked + .toggle-slider {
+  background-color: #28a745;
+}
+
+.toggle-switch input:checked + .toggle-slider::before {
+  transform: translateX(20px);
+}
+
+.toggle-switch:hover .toggle-slider {
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
+}
+
 
 button {
   display: block;
@@ -523,7 +635,18 @@ button:disabled {
   background-color: rgba(255, 255, 255, 0.1);
 }
 
+/* 深色模式下的拨杆开关样式 */
+.dark .toggle-slider {
+  background-color: #555;
+}
 
+.dark .toggle-switch input:checked + .toggle-slider {
+  background-color: #28a745;
+}
+
+.dark .toggle-switch:hover .toggle-slider {
+  box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+}
 
 .dark .error-message {
   background-color: rgba(220, 53, 69, 0.1);
