@@ -15,7 +15,6 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, 'config.yaml')
 def get_default_config():
     return {
         'general': {
-            'port': '5001',
             'keep_torrents': 'false',
             'keep_original_file': 'false',
             'prefer_japanese_title': 'true',

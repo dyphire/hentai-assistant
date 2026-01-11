@@ -231,7 +231,8 @@ def check_config(app_instance=None):
 
     # 通用设置
     general = config_data.get('general', {})
-    app_instance.config['PORT'] = int(general.get('port', 5001))
+    # 端口配置:优先从环境变量读取,默认5001
+    app_instance.config['PORT'] = int(os.environ.get('BACKEND_API_PORT', 5001))
     app_instance.config['KEEP_TORRENTS'] = general.get('keep_torrents', False)
     app_instance.config['KEEP_ORIGINAL_FILE'] = general.get('keep_original_file', False)
     app_instance.config['PREFER_JAPANESE_TITLE'] = general.get('prefer_japanese_title', True)
@@ -1272,6 +1273,7 @@ if __name__ == '__main__':
 
     try:
         # 使用已经计算好的 debug_mode 来运行应用
+        # 端口优先从环境变量 API_PORT 读取,默认5001
         app.run(host='0.0.0.0', port=app.config.get('PORT', 5001), debug=app.debug)
     finally:
         executor.shutdown()
