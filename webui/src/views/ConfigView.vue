@@ -28,10 +28,15 @@
           <Transition name="fade" mode="out-in">
             <div :key="activeConfigTab" class="tab-content">
               <div v-for="section in currentTabSections" :key="section.name" class="config-section">
-                <h2>{{ section.name }}</h2>
+                <h2>{{ getSectionLabel(section.name) }}</h2>
                 <div>
                   <div v-for="field in section.orderedFields" :key="field.key" class="config-item" :class="{ 'config-item-inline': isBooleanField(section.name, field.key) }">
-                    <label :for="`${section.name}-${field.key}`">{{ field.key }}:</label>
+                    <div class="config-label-group">
+                      <label :for="`${section.name}-${field.key}`">{{ getFieldLabel(section.name, field.key) }}</label>
+                      <span v-if="getFieldDescription(section.name, field.key)" class="config-description">
+                        {{ getFieldDescription(section.name, field.key) }}
+                      </span>
+                    </div>
                     <!-- 布尔型字段使用拨杆开关 -->
                     <label v-if="isBooleanField(section.name, field.key)" class="toggle-switch">
                       <input
@@ -72,6 +77,7 @@ import { ref, onMounted, computed } from 'vue';
 import axios from 'axios';
 import { useTheme } from '@/composables/useTheme';
 import NotificationConfigView from './NotificationConfigView.vue';
+import { getFieldLabel, getFieldDescription, getSectionLabel } from '@/config-labels';
 
 interface ConfigItem {
   [key: string]: string;
@@ -413,6 +419,25 @@ h2 {
   hyphens: auto;
 }
 
+.config-label-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+}
+
+.config-label-group > label {
+  margin-bottom: 0;
+}
+
+.config-description {
+  font-size: 12px;
+  color: #888;
+  font-weight: normal;
+  line-height: 1.4;
+}
+
+
 .config-item input[type="text"] {
   flex: 1;
   padding: 10px 12px;
@@ -622,6 +647,11 @@ button:disabled {
 .dark .config-item label {
   color: var(--text-color-light);
 }
+
+.dark .config-description {
+  color: rgba(255, 255, 255, 0.5);
+}
+
 
 .dark .config-item input[type="text"] {
   background-color: rgba(255, 255, 255, 0.08);
