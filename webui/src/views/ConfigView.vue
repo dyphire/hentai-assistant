@@ -2,15 +2,10 @@
   <div class="config-view">
     <h1>配置管理</h1>
 
-    <div class="tabs">
-      <button @click="activeTab = 'general'" :class="{ active: activeTab === 'general' }">通用配置</button>
-      <button @click="activeTab = 'notifications'" :class="{ active: activeTab === 'notifications' }">通知设置</button>
-    </div>
-
     <div v-if="loading">加载中...</div>
     <div v-else-if="error" class="error-message">{{ error }}</div>
     <div v-else>
-      <div v-if="activeTab === 'general'">
+      <div>
         <!-- 配置标签导航 -->
         <div class="config-tabs">
           <button
@@ -65,9 +60,6 @@
           <div v-if="saveError" class="error-message">保存失败: {{ saveError }}</div>
         </form>
       </div>
-      <div v-if="activeTab === 'notifications'">
-        <NotificationConfigView />
-      </div>
     </div>
   </div>
 </template>
@@ -76,7 +68,6 @@
 import { ref, onMounted, computed } from 'vue';
 import axios from 'axios';
 import { useTheme } from '@/composables/useTheme';
-import NotificationConfigView from './NotificationConfigView.vue';
 import { getFieldLabel, getFieldDescription, getSectionLabel } from '@/config-labels';
 
 interface ConfigItem {
@@ -116,7 +107,6 @@ const saving = ref(false);
 const saveSuccess = ref(false);
 const saveError = ref<string | null>(null);
 const { isDark } = useTheme();
-const activeTab = ref('general');
 const activeConfigTab = ref('basic');
 
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
@@ -293,29 +283,27 @@ onMounted(fetchConfig);
     border-bottom-color: #007bff; /* Change underline to highlight color */
 }
 
-/* 配置标签导航 */
+/* 配置标签导航 - 胶囊按钮式 */
 .config-tabs {
   display: flex;
-  gap: 8px;
+  justify-content: center;
+  gap: 12px;
   margin-bottom: 24px;
-  border-bottom: 2px solid #e9ecef;
-  padding-bottom: 0;
 }
 
 .tab-button {
-  padding: 12px 24px;
+  padding: 10px 24px;
   border: none;
+  border-radius: 8px;
   background: transparent;
+  color: #6c757d;
   cursor: pointer;
+  transition: all 0.2s ease;
   font-size: 15px;
   font-weight: 500;
-  color: #6c757d;
-  border-bottom: 3px solid transparent;
-  margin-bottom: -2px;
-  transition: all 0.2s ease;
-  white-space: nowrap;
-  border-radius: 8px 8px 0 0;
-  position: relative;
+  margin: 0;
+  width: auto;
+  display: inline-block;
 }
 
 .tab-button:hover {
@@ -324,10 +312,9 @@ onMounted(fetchConfig);
 }
 
 .tab-button.active {
-  color: #007bff;
-  border-bottom-color: #007bff;
+  color: #fff;
+  background: #007bff;
   font-weight: 600;
-  background: rgba(0, 123, 255, 0.05);
 }
 
 /* 标签内容动画 */
@@ -360,7 +347,7 @@ onMounted(fetchConfig);
 h1 {
   color: #333;
   text-align: center;
-  margin-bottom: 30px;
+  margin-bottom: 20px;
 }
 
 h2 {
@@ -699,10 +686,6 @@ button:disabled {
 */
 
 /* 深色模式下的配置标签 */
-.dark .config-tabs {
-  border-bottom-color: rgba(255, 255, 255, 0.12);
-}
-
 .dark .tab-button {
   color: rgba(255, 255, 255, 0.6);
 }
@@ -713,9 +696,8 @@ button:disabled {
 }
 
 .dark .tab-button.active {
-  color: var(--primary-color);
-  border-bottom-color: var(--primary-color);
-  background: rgba(0, 123, 255, 0.1);
+  color: #fff;
+  background: var(--primary-color);
 }
 
 .dark .tabs button {

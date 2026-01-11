@@ -15,9 +15,28 @@ const props = defineProps({
 const emit = defineEmits(['delete', 'save'])
 
 const expanded = ref(false)
-const newEvent = ref('')
 const originalNotification = ref(null as any)
 const isDirty = ref(false)
+
+// 可用事件列表
+const availableEvents = [
+  { key: 'task.complete', label: '任务完成', group: '任务' },
+  { key: 'task.error', label: '任务失败', group: '任务' },
+  { key: 'task.cancel', label: '任务取消', group: '任务' },
+  { key: 'komga.new', label: '新书入库', group: 'Komga' },
+  { key: 'komga.delete', label: '书籍删除', group: 'Komga' },
+  { key: 'hath.offline', label: '客户端离线', group: 'H@H' },
+  { key: 'hath.online', label: '客户端上线', group: 'H@H' },
+  { key: 'hath.status_change', label: '状态变化', group: 'H@H' },
+  { key: 'hath.unreachable', label: '网络不可达', group: 'H@H' }
+]
+
+// 按分组整理事件
+const eventGroups = [
+  { name: '任务', events: availableEvents.filter(e => e.group === '任务') },
+  { name: 'Komga', events: availableEvents.filter(e => e.group === 'Komga') },
+  { name: 'H@H', events: availableEvents.filter(e => e.group === 'H@H') }
+]
 
 import { watch, onMounted } from 'vue'
 
@@ -42,16 +61,22 @@ function onSave() {
   originalNotification.value = JSON.parse(JSON.stringify(props.notification))
 }
 
-
-function addEvent() {
-  if (newEvent.value.trim() && !props.notification.events.includes(newEvent.value.trim())) {
-    props.notification.events.push(newEvent.value.trim())
-    newEvent.value = ''
-  }
+// 检查事件是否已选中
+function isEventSelected(eventKey: string): boolean {
+  return props.notification.events?.includes(eventKey) ?? false
 }
 
-function removeEvent(index: number) {
-  props.notification.events.splice(index, 1)
+// 切换事件选择状态
+function toggleEvent(eventKey: string) {
+  if (!props.notification.events) {
+    props.notification.events = []
+  }
+  const index = props.notification.events.indexOf(eventKey)
+  if (index === -1) {
+    props.notification.events.push(eventKey)
+  } else {
+    props.notification.events.splice(index, 1)
+  }
 }
 </script>
 
@@ -91,21 +116,27 @@ function removeEvent(index: number) {
         </select>
       </div>
       <div class="config-item">
-        <label>事件:</label>
-        <div class="event-tags">
-          <span v-for="(event, index) in notification.events" :key="index" class="tag">
-            {{ event }}
-            <button @click="removeEvent(index)" class="remove-tag-btn">×</button>
-          </span>
-          <input
-            type="text"
-            v-model="newEvent"
-            @keydown.enter.prevent="addEvent"
-            placeholder="添加事件..."
-            class="event-input"
-          />
+        <label>订阅事件:</label>
+        <div class="event-groups">
+          <div v-for="group in eventGroups" :key="group.name" class="event-group">
+            <div class="event-group-title">{{ group.name }}</div>
+            <div class="event-checkboxes">
+              <label 
+                v-for="event in group.events" 
+                :key="event.key" 
+                class="event-checkbox"
+                :class="{ 'is-selected': isEventSelected(event.key) }"
+              >
+                <input 
+                  type="checkbox" 
+                  :checked="isEventSelected(event.key)"
+                  @change="toggleEvent(event.key)"
+                />
+                <span class="checkbox-label">{{ event.label }}</span>
+              </label>
+            </div>
+          </div>
         </div>
-        <small class="events-tip">输入事件后按回车添加</small>
       </div>
       <div class="card-actions">
         <button @click="emit('delete')" class="delete-btn">删除</button>
@@ -283,52 +314,95 @@ h2 {
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.15);
 }
 
-.event-tags {
+.event-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background-color: #fafafa;
+}
+
+.event-group-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #666;
+  margin-bottom: 8px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid #e9ecef;
+}
+
+.event-checkboxes {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
   gap: 8px;
-  padding: 6px 12px; /* Adjusted padding */
 }
 
-.event-input {
-  border: none !important;
-  outline: none !important;
-  box-shadow: none !important;
-  flex-grow: 1;
-  padding: 0 !important;
-  min-height: auto !important;
-  background: transparent !important;
-}
-
-.tag {
-  background-color: #007bff;
-  color: white;
-  padding: 4px 8px;
-  border-radius: 4px;
+.event-checkbox {
   display: inline-flex;
   align-items: center;
-  font-size: 13px;
-}
-
-.remove-tag-btn {
-  background: none;
-  border: none;
-  color: white;
-  margin-left: 6px;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  background-color: white;
   cursor: pointer;
-  font-weight: bold;
-  font-size: 14px;
-  padding: 0;
-  line-height: 1;
+  font-size: 13px;
+  color: #495057;
+  transition: all 0.2s ease;
+  user-select: none;
 }
 
-.events-tip {
-  display: block;
-  margin-top: 4px;
-  margin-left: 0;
-  font-size: 12px;
-  color: #888;
+.event-checkbox:hover {
+  border-color: #007bff;
+  background-color: #f8f9ff;
+}
+
+.event-checkbox.is-selected {
+  border-color: #007bff;
+  background-color: #e7f1ff;
+  color: #0056b3;
+}
+
+.event-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #007bff;
+  cursor: pointer;
+  margin: 0;
+}
+
+.checkbox-label {
+  cursor: pointer;
+}
+
+/* Dark Mode for event checkboxes */
+.dark .event-groups {
+  background-color: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.dark .event-group-title {
+  color: rgba(255, 255, 255, 0.7);
+  border-bottom-color: rgba(255, 255, 255, 0.1);
+}
+
+.dark .event-checkbox {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.2);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.dark .event-checkbox:hover {
+  border-color: var(--primary-color);
+  background-color: rgba(0, 123, 255, 0.15);
+}
+
+.dark .event-checkbox.is-selected {
+  border-color: var(--primary-color);
+  background-color: rgba(0, 123, 255, 0.25);
+  color: #fff;
 }
 
 /* Dark Mode */

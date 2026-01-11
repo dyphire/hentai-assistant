@@ -30,6 +30,7 @@ const cycleTheme = () => {
     <nav class="main-nav">
       <RouterLink to="/" class="nav-link">首页</RouterLink>
       <RouterLink to="/config" class="nav-link">配置</RouterLink>
+      <RouterLink to="/notifications" class="nav-link">通知</RouterLink>
       <RouterLink to="/download" class="nav-link">下载</RouterLink>
       <RouterLink to="/tasks" class="nav-link">任务</RouterLink>
       <button @click="cycleTheme" class="theme-toggle" :title="`当前模式: ${userPreference === 'auto' ? '自动' : userPreference === 'light' ? '浅色' : '暗色'} (点击切换)`">

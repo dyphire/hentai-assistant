@@ -3,6 +3,7 @@ import HomeView from '../views/HomeView.vue'
 import ConfigView from '../views/ConfigView.vue' // 导入 ConfigView
 import DownloadView from '../views/DownloadView.vue' // 导入 DownloadView
 import TaskListView from '../views/TaskListView.vue' // 导入 TaskListView
+import NotificationConfigView from '../views/NotificationConfigView.vue' // 导入 NotificationConfigView
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -16,6 +17,11 @@ const router = createRouter({
       path: '/config', // 添加新的配置路由
       name: 'config',
       component: ConfigView,
+    },
+    {
+      path: '/notifications', // 通知设置路由
+      name: 'notifications',
+      component: NotificationConfigView,
     },
     {
       path: '/download', // 添加新的下载任务路由

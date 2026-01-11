@@ -125,6 +125,7 @@ async function saveNotifier(key: string) {
 
 <template>
   <div class="notification-config">
+    <h1>通知设置</h1>
     <div v-if="loading">加载中...</div>
     <div v-else-if="error" class="error-message">{{ error }}</div>
     <div v-else>
@@ -151,7 +152,20 @@ async function saveNotifier(key: string) {
 <style scoped>
 /* Using styles from ConfigView.vue for consistency */
 .notification-config {
-  /* No extra padding needed */
+  padding: 20px;
+  max-width: 800px;
+  margin: 0 auto;
+  font-family: Arial, sans-serif;
+}
+
+h1 {
+  color: #333;
+  text-align: center;
+  margin-bottom: 30px;
+}
+
+.dark h1 {
+  color: var(--text-color-light);
 }
 
 .notification-card-wrapper {
