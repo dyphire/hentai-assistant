@@ -144,6 +144,14 @@
               >
                 {{ stoppingTasks[task.id] ? '停止中...' : '停止任务' }}
               </button>
+              <button
+                v-if="task.status !== '进行中'"
+                @click="confirmDeleteTask(task.id)"
+                :disabled="deletingTasks[task.id]"
+                class="delete-button"
+              >
+                {{ deletingTasks[task.id] ? '删除中...' : '删除' }}
+              </button>
             </div>
             <div v-if="expandedLogs[task.id]" class="task-log-container">
               <div class="task-log-header">
@@ -235,6 +243,7 @@ const error = ref<string | null>(null);
 const expandedLogs = ref<{ [key: string]: boolean }>({});
 const stoppingTasks = ref<{ [key: string]: boolean }>({});
 const retryingTasks = ref<{ [key: string]: boolean }>({});
+const deletingTasks = ref<{ [key: string]: boolean }>({});
 const currentFilter = ref<string>('all'); // 当前选中的过滤器
 const clearing = ref(false); // 清除任务状态
 const searchQuery = ref<string>(''); // 搜索查询
@@ -685,6 +694,27 @@ const retryTask = async (taskId: string) => {
   }
 };
 
+const confirmDeleteTask = async (taskId: string) => {
+  const confirmed = await showConfirmDialog('确定要删除此任务记录吗？此操作不可撤销。');
+  if (confirmed) {
+    deleteTask(taskId);
+  }
+};
+
+const deleteTask = async (taskId: string) => {
+  deletingTasks.value[taskId] = true;
+  try {
+    await axios.delete(`${API_BASE_URL}/tasks/${taskId}`);
+    showNotification('任务已删除', 'success');
+    await fetchTasks(false);
+  } catch (err: any) {
+    console.error(`删除任务 ${taskId} 失败:`, err);
+    showNotification(`删除任务失败: ${err.response?.data?.message || err.message}`, 'error');
+  } finally {
+    deletingTasks.value[taskId] = false;
+  }
+};
+
 const openGallery = (url: string) => {
   if (url) {
     window.open(url, '_blank');
@@ -1077,7 +1107,7 @@ h1 {
   gap: 10px;
 }
 
-.log-button, .stop-button, .retry-button, .gallery-button, .refresh-button {
+.log-button, .stop-button, .retry-button, .gallery-button, .refresh-button, .delete-button {
   padding: 8px 15px;
   border: none;
   border-radius: 5px;
@@ -1128,6 +1158,20 @@ h1 {
 }
 
 .stop-button:disabled {
+  background-color: #cccccc;
+  cursor: not-allowed;
+}
+
+.delete-button {
+  background-color: #6c757d;
+  color: white;
+}
+
+.delete-button:hover {
+  background-color: #5a6268;
+}
+
+.delete-button:disabled {
   background-color: #cccccc;
   cursor: not-allowed;
 }
@@ -2001,6 +2045,15 @@ h1 {
 
 .dark .stop-button:hover {
   background-color: #c82333;
+}
+
+.dark .delete-button {
+  background-color: #6c757d;
+  color: white;
+}
+
+.dark .delete-button:hover {
+  background-color: #5a6268;
 }
 
 .dark .retry-button {

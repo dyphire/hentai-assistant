@@ -339,6 +339,18 @@ class TaskDatabase:
                 print(f"Database error clearing tasks: {e}")
                 return False
 
+    def delete_task(self, task_id: str) -> bool:
+        """删除单个任务"""
+        with self.lock:
+            try:
+                with self._get_conn() as conn:
+                    cursor = conn.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+                    conn.commit()
+                    return cursor.rowcount > 0
+            except sqlite3.Error as e:
+                print(f"Database error deleting task: {e}")
+                return False
+
     def migrate_memory_tasks(self, memory_tasks: Dict) -> bool:
         """将内存中的任务迁移到数据库"""
         with self.lock:

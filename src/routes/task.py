@@ -171,6 +171,53 @@ def get_task(task_id):
             global_logger.error(f"Error getting task {task_id}: {e}")
         return json_response({'error': f'Failed to get task: {str(e)}'}), 500
 
+@bp.route('/api/tasks/<task_id>', methods=['DELETE'])
+def delete_task(task_id):
+    """删除指定任务（仅限非进行中的任务）"""
+    global_logger = current_app.config.get('GLOBAL_LOGGER')
+    try:
+        # 导入必要的模块和变量
+        from utils import TaskStatus
+        from database import task_db
+
+        # 从 current_app.config 获取 tasks 和 tasks_lock
+        tasks = current_app.config.get('TASKS', {})
+        tasks_lock = current_app.config.get('TASKS_LOCK')
+
+        if not tasks_lock:
+            return json_response({'error': 'Server not properly initialized'}), 500
+
+        # 首先检查任务是否存在
+        task_info = task_db.get_task(task_id)
+        if not task_info:
+            return json_response({'error': 'Task not found'}), 404
+
+        # 检查任务状态，不允许删除进行中的任务
+        if task_info['status'] == TaskStatus.IN_PROGRESS:
+            return json_response({'error': 'Cannot delete task that is in progress'}), 400
+
+        # 从内存中删除任务（如果存在）
+        with tasks_lock:
+            if task_id in tasks:
+                # 关闭日志缓冲区
+                if hasattr(tasks[task_id], 'log_buffer'):
+                    tasks[task_id].log_buffer.close()
+                del tasks[task_id]
+
+        # 从数据库删除任务
+        success = task_db.delete_task(task_id)
+        if not success:
+            return json_response({'error': 'Failed to delete task from database'}), 500
+
+        if global_logger:
+            global_logger.info(f"Task {task_id} deleted successfully")
+        return json_response({'message': 'Task deleted successfully'}), 200
+
+    except Exception as e:
+        if global_logger:
+            global_logger.error(f"Error deleting task {task_id}: {e}")
+        return json_response({'error': f'Failed to delete task: {str(e)}'}), 500
+
 @bp.route('/api/tasks/<task_id>/cancel', methods=['POST'])
 def cancel_task(task_id):
     """取消/停止指定任务"""
