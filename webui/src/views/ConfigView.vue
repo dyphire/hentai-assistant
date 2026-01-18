@@ -49,6 +49,14 @@
                       v-model="(editableConfig[section.name] as ConfigItem)[field.key]"
                       type="text"
                     />
+                    <!-- move_path 模板预览 -->
+                    <div 
+                      v-if="section.name === 'general' && field.key === 'move_path' && movePathPreview"
+                      class="template-preview"
+                    >
+                      <span class="preview-label">预览：</span>
+                      <code class="preview-value">{{ movePathPreview }}</code>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -110,6 +118,63 @@ const { isDark } = useTheme();
 const activeConfigTab = ref('basic');
 
 const API_BASE_URL = '/api'; // 使用相对路径，通过 Vite 代理或 Flask 静态服务处理
+
+// Jinja 模板预览的模拟数据
+const sampleTemplateData: Record<string, string | null> = {
+  filename: '[クジラックス] ろりとぼくらの。 [中国翻訳] [1234567].cbz',
+  author: 'クジラックス',
+  writer: 'クジラックス',
+  penciller: 'クジラックス',
+  series: 'ろりとぼくらの。',
+  title: 'ろりとぼくらの。',
+  translator: '某某汉化组',
+  genre: 'Doujinshi',
+  category: 'doujinshi',
+  tags: 'lolicon, schoolgirl uniform',
+  web: 'https://exhentai.org/g/1234567/abcdef/',
+  agerating: 'Adults Only 18+',
+  manga: 'YesAndRightToLeft',
+  languageiso: 'zh',
+  number: '1',
+  originaltitle: 'ろりとぼくらの。'
+};
+
+// 简单的 Jinja-like 模板解析器
+function renderJinjaPreview(template: string): string {
+  if (!template) return '';
+  
+  let result = template;
+  
+  // 处理 {% if var %}...{% else %}...{% endif %} 条件语句
+  const ifElseRegex = /\{%\s*if\s+(\w+)\s*%\}([\s\S]*?)\{%\s*else\s*%\}([\s\S]*?)\{%\s*endif\s*%\}/g;
+  result = result.replace(ifElseRegex, (_match, varName, ifContent, elseContent) => {
+    const value = sampleTemplateData[varName.toLowerCase()];
+    return (value && value.trim()) ? ifContent : elseContent;
+  });
+  
+  // 处理 {% if var %}...{% endif %} 条件语句（没有 else）
+  const ifOnlyRegex = /\{%\s*if\s+(\w+)\s*%\}([\s\S]*?)\{%\s*endif\s*%\}/g;
+  result = result.replace(ifOnlyRegex, (_match, varName, ifContent) => {
+    const value = sampleTemplateData[varName.toLowerCase()];
+    return (value && value.trim()) ? ifContent : '';
+  });
+  
+  // 处理 {{variable}} 变量替换
+  const varRegex = /\{\{\s*(\w+)\s*\}\}/g;
+  result = result.replace(varRegex, (_match, varName) => {
+    const value = sampleTemplateData[varName.toLowerCase()];
+    return (value && value.trim()) ? value : 'Unknown';
+  });
+  
+  return result;
+}
+
+// 计算 move_path 的预览值
+const movePathPreview = computed(() => {
+  const movePath = (editableConfig.value['general'] as ConfigItem)?.['move_path'];
+  if (!movePath) return '';
+  return renderJinjaPreview(movePath);
+});
 
 // 定义布尔类型的配置字段
 const booleanFields: Record<string, string[]> = {
@@ -446,6 +511,33 @@ h2 {
   background-color: #fefefe;
 }
 
+/* 模板预览区域样式 */
+.template-preview {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+  border: 1px solid #dee2e6;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.template-preview .preview-label {
+  color: #6c757d;
+  font-weight: 500;
+  margin-right: 6px;
+}
+
+.template-preview .preview-value {
+  color: #28a745;
+  background: rgba(40, 167, 69, 0.1);
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
 /* 布尔型配置项行内布局 */
 .config-item-inline {
   flex-direction: row !important;
@@ -650,6 +742,21 @@ button:disabled {
   border-color: var(--primary-color);
   box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
   background-color: rgba(255, 255, 255, 0.1);
+}
+
+/* 深色模式下的模板预览样式 */
+.dark .template-preview {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05) 0%, rgba(255, 255, 255, 0.02) 100%);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.dark .template-preview .preview-label {
+  color: rgba(255, 255, 255, 0.6);
+}
+
+.dark .template-preview .preview-value {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.15);
 }
 
 /* 深色模式下的拨杆开关样式 */

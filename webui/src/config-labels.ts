@@ -47,7 +47,7 @@ export const configLabels: Record<string, Record<string, FieldLabel>> = {
         },
         move_path: {
             label: '完成后移动',
-            description: '创建 .cbz 后将文件移动到此目录'
+            description: '支持模板变量：{{author}}, {{series}}, {{title}}, {{filename}}, {{writer}}, {{penciller}}'
         }
     },
 
