@@ -1,5 +1,4 @@
 import zipfile, os
-import gc
 import shutil
 import tempfile
 from xml.dom.minidom import parseString
@@ -36,17 +35,14 @@ def extract_images_only(file_path, temp_dir):
 
     if file_path.lower().endswith('.7z'):
         with py7zr.SevenZipFile(file_path, 'r') as archive:
-            archive.extractall(path=temp_dir)
-            archive.close()
-            gc.collect()
+            img_names = [name for name in archive.getnames() if name.lower().endswith(file_exts)]
+            if img_names:
+                archive.extract(path=temp_dir, targets=img_names)
     else:
         with zipfile.ZipFile(file_path, 'r') as archive:
             for name in archive.namelist():
                 if name.lower().endswith(file_exts):
                     archive.extract(name, temp_dir)
-                    gc.collect()
-            archive.close()
-
 
 def write_xml_to_zip(file_path, metadata, app=None, logger=None):
     zip_file_root = os.path.dirname(file_path)
