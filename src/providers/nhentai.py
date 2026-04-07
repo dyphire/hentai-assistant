@@ -3,6 +3,7 @@ import re
 import json
 import os
 import time
+import urllib.parse
 from utils import check_dirs
 
 def try_n(retries):
@@ -23,19 +24,19 @@ class File:
         self.url = data.get('url')
         self.referer = data.get('referer')
         self.name = data.get('name')
+        self.possible_urls = data.get('possible_urls', [])
 
 class File_nhentai(File):
     type = 'nhentai'
     format = 'page:04;'
 
 class Info:
-    def __init__(self, host, id, id_media, title, title_jpn, p, artists, groups, series, characters, tags, lang, category, formats):
+    def __init__(self, host, id, id_media, title, title_jpn, artists, groups, series, characters, tags, lang, category, page_paths=None):
         self.host = host
         self.id = id
         self.id_media = id_media
         self.title = title
         self.title_jpn = title_jpn
-        self.p = p
         self.artists = artists
         self.groups = groups
         self.series = series
@@ -43,7 +44,7 @@ class Info:
         self.tags = tags
         self.lang = lang
         self.category = category
-        self.formats = formats
+        self.page_paths = page_paths or []
 
 def format_filename(site, data, ext):
     page = data.get('page', 0)
@@ -67,57 +68,81 @@ def get_id(url):
 
 def _parse_gallery(gal):
     host = 'https://i.nhentai.net'
-    id = int(gal['id'])
-    id_media = int(gal['media_id'])
-    title = gal['title']['english'] or gal['title']['japanese'] or gal['title']['pretty']
-    title_jpn = gal['title']['japanese'] or gal['title']['pretty']
-    images = gal.get('images', {})
-    pages = images.get('pages', []) if images else []
-    p = len(pages)
+    id = int(gal.get('id', 0) or 0)
+    id_media = int(gal.get('media_id', id) or id)
+
+    title_obj = gal.get('title', {}) or {}
+    title = (title_obj.get('english') or title_obj.get('japanese') or title_obj.get('pretty') or '').strip()
+    title_jpn = (title_obj.get('japanese') or title_obj.get('pretty') or '').strip()
+
+    pages_data = gal.get('pages') or []
+    page_paths = []
+    if isinstance(pages_data, list) and pages_data:
+        for page in pages_data:
+            if not isinstance(page, dict):
+                continue
+            path = page.get('path', '') or ''
+            page_paths.append(path)
+
     artists, groups, series, characters, tags = [], [], [], [], []
     lang = category = None
     tags_list = gal.get('tags') or []
     for tag in tags_list:
-        tag_type = tag['type']
+        if not isinstance(tag, dict):
+            continue
+        tag_type = tag.get('type')
+        tag_name = tag.get('name')
+        if not tag_type or not tag_name:
+            continue
+
         if tag_type == 'artist':
-            name = tag['name'].split('|')[0].strip()
-            artists.append(name)
+            artists.append(tag_name.split('|')[0].strip())
         elif tag_type == 'group':
-            name = tag['name'].split('|')[0].strip()
-            groups.append(name)
+            groups.append(tag_name.split('|')[0].strip())
         elif tag_type == 'parody':
-            series.append(tag['name'])
+            series.append(tag_name)
         elif tag_type == 'character':
-            characters.append(tag['name'])
+            characters.append(tag_name)
         elif tag_type == 'language':
-            lang = tag['name']
+            lang = tag_name
         elif tag_type == 'category':
-            category = tag['name']
+            category = tag_name
         elif tag_type == 'tag':
-            tags.append(tag['name'])
-    formats = [{'j':'jpg', 'p':'png', 'g':'gif', 'w':'webp'}.get(img['t'], 'jpg') for img in pages]
-    return Info(host, id, id_media, title, title_jpn, p, artists, groups, series, characters, tags, lang, category, formats)
+            tags.append(tag_name)
+
+    return Info(host, id, id_media, title, title_jpn, artists, groups, series, characters, tags, lang, category, page_paths)
+
+_nhentai_last_api_call = 0.0
+_nhentai_min_interval = 2.1  # 30/min -> 2 sec, use 2.1 for安全余量
+
+
+def _wait_nhentai_rate_limit():
+    global _nhentai_last_api_call
+    now = time.time()
+    elapsed = now - _nhentai_last_api_call
+    if elapsed < _nhentai_min_interval:
+        time.sleep(_nhentai_min_interval - elapsed)
+    _nhentai_last_api_call = time.time()
+
+
+def _nhentai_get_with_rate_limit(session, url, **kwargs):
+    for attempt in range(4):
+        _wait_nhentai_rate_limit()
+        response = session.get(url, **kwargs)
+        if response.status_code == 429:
+            backoff = (2 ** attempt)
+            time.sleep(backoff)
+            continue
+        response.raise_for_status()
+        return response
+    raise Exception(f"nhentai API 频率限制触发: {url}")
 
 @try_n(3)
 def get_info(id, session):
-    try:
-        url = f'https://nhentai.net/api/gallery/{id}'
-        response = session.get(url)
-        response.raise_for_status()
-        gal = response.json()
-        return _parse_gallery(gal)
-    except Exception as e:
-        try:
-            url = f'https://nhentai.net/g/{id}/1/'
-            response = session.get(url, headers={'Referer': f'https://nhentai.net/g/{id}/'})
-            response.raise_for_status()
-            html = response.text
-            m = re.search(r'JSON\.parse\((.*?)\);', html)
-            if m:
-                gal = json.loads(json.loads(m.group(1)))
-            return _parse_gallery(gal)
-        except:
-            raise Exception("Failed to parse nhentai data")
+    url = f'https://nhentai.net/api/v2/galleries/{id}'
+    response = _nhentai_get_with_rate_limit(session, url, timeout=30)
+    gal = response.json()
+    return _parse_gallery(gal)
 
 @try_n(3)
 def get_imgs(id, session):
@@ -125,15 +150,28 @@ def get_imgs(id, session):
         info = get_info(id, session)
         if not info:
             return None, []
+
         imgs = []
-        for p in range(1, info.p + 1):
-            ext = info.formats[p - 1]
-            url_page = f'https://nhentai.net/g/{id}/{p}/'
-            possible_urls = build_nhentai_image_urls(info.id_media, p, ext)
-            url_img = possible_urls[0]
-            d = {'page': p, 'possible_urls': possible_urls}
-            img = File_nhentai({'url': url_img, 'referer': url_page, 'name': format_filename('nhentai', d, ext)})
+        if not info.page_paths:
+            return info, imgs
+
+        for idx, path in enumerate(info.page_paths, start=1):
+            ext = 'jpg'
+            if path and '.' in path:
+                ext = path.rsplit('.', 1)[-1].lower()
+
+            if path.startswith('http'):
+                possible_urls = [path]
+            else:
+                normalized_path = path if path.startswith('/') else f'/{path}'
+                possible_urls = [f'https://i{domain}.nhentai.net{normalized_path}' for domain in NHENTAI_DOMAINS]
+
+            primary_url = possible_urls[0]
+            url_page = f'https://nhentai.net/g/{id}/{idx}/'
+            d = {'page': idx, 'possible_urls': possible_urls}
+            img = File_nhentai({'url': primary_url, 'referer': url_page, 'name': format_filename('nhentai', d, ext), 'possible_urls': possible_urls})
             imgs.append(img)
+
         return info, imgs
     except Exception as e:
         return None, []
@@ -171,37 +209,37 @@ class NHentaiTools:
             if language:
                 query_parts.append(f"language:{language.lower()}")
 
-            query = " ".join(query_parts)
-            url = f'https://nhentai.net/api/galleries/search?query={query}'
-            response = self.session.get(url)
-            response.raise_for_status()
+            query = urllib.parse.quote_plus(" ".join(query_parts))
+            url = f'https://nhentai.net/api/v2/search?query={query}'
+            response = _nhentai_get_with_rate_limit(self.session, url)
             result = response.json().get('result', [])
 
             if self.logger:
                 self.logger.info(f"nhentai 搜索结果数量: {len(result)}")
                 if result:
-                    self.logger.info(f"第一个结果标题: {result[0]['title']}")
+                    first_item = result[0] or {}
+                    first_title = first_item.get('english_title') or first_item.get('japanese_title') or ''
+                    self.logger.info(f"第一个结果标题: {first_title}")
 
             if result:
                 # 找到匹配的画廊
                 best_match = None
                 for item in result:
                     try:
-                        gallery_title = item['title'].get('english') or item['title'].get('japanese') or ''
-                        gallery_title_jpn = item['title'].get('japanese') or ''
+                        gallery_title = (item.get('english_title') or item.get('japanese_title') or '').strip()
+                        gallery_title_jpn = (item.get('japanese_title') or '').strip()
 
                         # 检查标题匹配度 - 简化匹配逻辑
                         title_match = title.lower() in gallery_title.lower()
-                        jpn_match = (original_title and gallery_title_jpn and
-                                    original_title.lower() in gallery_title_jpn.lower())
+                        jpn_match = (original_title and gallery_title_jpn and original_title.lower() in gallery_title_jpn.lower())
 
                         if self.logger:
-                            self.logger.info(f"检查画廊 {item['id']}: title='{gallery_title}', title_match={title_match}, jpn_match={jpn_match}")
+                            self.logger.info(f"检查画廊 {item.get('id')}: title='{gallery_title}', title_match={title_match}, jpn_match={jpn_match}")
 
                         if title_match or jpn_match:
                             best_match = item
                             if self.logger:
-                                self.logger.info(f"找到匹配的画廊: {item['id']}")
+                                self.logger.info(f"找到匹配的画廊: {item.get('id')}")
                             break
                     except Exception as e:
                         if self.logger:
@@ -209,11 +247,11 @@ class NHentaiTools:
                         continue
 
                 if best_match:
-                    return best_match['id']
+                    return best_match.get('id')
                 else:
                     # 如果没有找到精确匹配，raise异常并返回第一个搜索结果的URL
                     if result:
-                        nhentai_url = f"https://nhentai.net/g/{result[0]['id']}/"
+                        nhentai_url = f"https://nhentai.net/g/{result[0].get('id')}/"
                         raise Exception(f"未找到匹配的画廊, 找到一个相似画廊: {nhentai_url}")
                     else:
                         raise Exception("未找到匹配的画廊")

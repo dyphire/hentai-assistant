@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hentai Assistant
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Add a "Hentai Assistant" button on e-hentai.org, exhentai.org and nhentai.net, with menu
 // @author       rosystain
 // @match        https://e-hentai.org/*
@@ -322,9 +322,21 @@
             }
 
             // 页面变化时重新检测并注入按钮
-            if (IS_HDOUJIN) {
+            if (IS_NHENTAI) {
+                if (isNHentaiDetailPage()) {
+                    setTimeout(() => {
+                        addNHentaiDetailButton();
+                        observeNHentaiInfoContainer();
+                    }, 1000);
+                } else if (isNHentaiListPage()) {
+                    setTimeout(addNHentaiListButtons, 1000);
+                }
+            } else if (IS_HDOUJIN) {
                 if (isHDoujinDetailPage()) {
-                    setTimeout(addHDoujinDetailButton, 1000);
+                    setTimeout(() => {
+                        addHDoujinDetailButton();
+                        observeHDoujinActionsContainer();
+                    }, 1000);
                 } else if (isHDoujinListPage()) {
                     setTimeout(addHDoujinListButtons, 1000);
                 }
@@ -1042,24 +1054,35 @@
     }
 
     // ========== NHentai 按钮注入函数 ==========
-    function addNHentaiDetailButton() {
+    function addNHentaiDetailButton(retries = 0) {
         const infoElement = document.querySelector('#info');
-        if (!infoElement) return;
+        const actionsElement = document.querySelector('#info .buttons.btn-group, .buttons.btn-group');
 
-        // 检查是否已经添加过按钮
-        if (document.querySelector('.nhentai-ha-container')) return;
+        if (!infoElement) {
+            if (retries < 5) {
+                setTimeout(() => addNHentaiDetailButton(retries + 1), 600);
+            }
+            return;
+        }
 
-        // 检测黑暗模式
+        // 已经添加过按钮则不重复添加
+        if ((actionsElement && actionsElement.querySelector('.nhentai-ha-btn')) || document.querySelector('.nhentai-ha-container')) {
+            return;
+        }
+
         const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
 
-        // 创建下载按钮容器
-        const buttonContainer = document.createElement('div');
-        buttonContainer.className = `nhentai-ha-container${isDark ? ' dark' : ''}`;
-
-        // 创建下载按钮
         const downloadBtn = document.createElement('button');
         downloadBtn.className = 'nhentai-ha-btn';
         downloadBtn.textContent = '📥 Hentai Assistant 下载';
+
+        if (actionsElement) {
+            downloadBtn.classList.add('btn', 'btn-secondary');
+            downloadBtn.style.marginLeft = '0';
+        } else {
+            downloadBtn.style.marginLeft = '8px';
+        }
+
         downloadBtn.onclick = () => {
             const currentUrl = window.location.href;
             const galleryInfo = getNHentaiGalleryInfo();
@@ -1069,49 +1092,93 @@
             sendDownload(currentUrl, DOWNLOAD_MODE);
         };
 
-        buttonContainer.appendChild(downloadBtn);
-        infoElement.appendChild(buttonContainer);
+        if (actionsElement) {
+            actionsElement.appendChild(downloadBtn);
+        } else {
+            const buttonContainer = document.createElement('div');
+            buttonContainer.className = `nhentai-ha-container${isDark ? ' dark' : ''}`;
+            buttonContainer.appendChild(downloadBtn);
+            infoElement.appendChild(buttonContainer);
+        }
 
         // 同时检查页面下方的画廊卡片并注入按钮
         addNHentaiDetailGalleryButtons();
     }
 
+    // 监听 NHentai 详情页面 #info 变化，确保按钮不会被页面后续渲染移除
+    let nhentaiInfoObserver = null;
+    function observeNHentaiInfoContainer() {
+        const rootElement = document.querySelector('body');
+        if (!rootElement) return;
+
+        if (nhentaiInfoObserver) {
+            nhentaiInfoObserver.disconnect();
+        }
+
+        nhentaiInfoObserver = new MutationObserver((mutations) => {
+            if (!isNHentaiDetailPage()) return;
+            addNHentaiDetailButton();
+        });
+
+        nhentaiInfoObserver.observe(rootElement, { childList: true, subtree: true });
+    }
+
     // ========== HDoujin 按钮注入函数 ==========
     function addHDoujinDetailButton() {
-        // 查找包含操作按钮的div.actions元素
         const actionsElement = document.querySelector('div.actions');
         if (!actionsElement) return;
 
-        // 检查是否已经添加过按钮
-        if (document.querySelector('.hdoujin-ha-container')) return;
+        // 如果已经在 actions里有按钮，直接返回
+        if (actionsElement.querySelector('.hdoujin-ha-btn')) return;
 
         // 检测黑暗模式
         const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-        // 创建下载按钮容器
-        const buttonContainer = document.createElement('div');
-        buttonContainer.className = `hdoujin-ha-container${isDark ? ' dark' : ''}`;
 
         // 创建下载按钮
         const downloadBtn = document.createElement('button');
         downloadBtn.className = 'hdoujin-ha-btn';
         downloadBtn.textContent = '📥 Hentai Assistant 下载';
+        downloadBtn.style.marginLeft = '8px';
+
+        // 与原生按钮样式一致
+        if (actionsElement) {
+            downloadBtn.classList.add('btn', 'btn-secondary');
+            downloadBtn.style.marginLeft = '0';
+        } else {
+            downloadBtn.style.marginLeft = '8px';
+        }
+
         downloadBtn.onclick = () => {
             const currentUrl = window.location.href;
             const galleryInfo = getHDoujinGalleryInfo();
             if (galleryInfo) {
                 showToast(`正在推送 HDoujin 画廊: ${galleryInfo.title}`, 'info');
             }
-            sendDownload(currentUrl, "archive");
+            sendDownload(currentUrl, 'archive');
         };
 
-        buttonContainer.appendChild(downloadBtn);
-
-        // 在actions元素后插入按钮容器（在Start Reading按钮下方）
-        actionsElement.parentNode.insertBefore(buttonContainer, actionsElement.nextSibling);
+        actionsElement.appendChild(downloadBtn);
 
         // 同时检查页面下方的画廊卡片并注入按钮
         addHDoujinDetailGalleryButtons();
+    }
+
+    // 监听 HDoujin 详情页面 actions 区变化，确保按钮不会被页面后续渲染移除
+    let hdoujinActionsObserver = null;
+    function observeHDoujinActionsContainer() {
+        const rootElement = document.querySelector('body');
+        if (!rootElement) return;
+
+        if (hdoujinActionsObserver) {
+            hdoujinActionsObserver.disconnect();
+        }
+
+        hdoujinActionsObserver = new MutationObserver(() => {
+            if (!isHDoujinDetailPage()) return;
+            addHDoujinDetailButton();
+        });
+
+        hdoujinActionsObserver.observe(rootElement, { childList: true, subtree: true });
     }
 
     // 为详情页下方的画廊卡片注入按钮
@@ -1247,16 +1314,24 @@
     if (isNHentaiDetailPage()) {
         // NHentai 详情页代码
         addNHentaiDetailButton();
+        observeNHentaiInfoContainer();
     } else if (isNHentaiListPage()) {
         // NHentai 列表页代码
         addNHentaiListButtons();
     } else if (isHDoujinDetailPage()) {
         // HDoujin 详情页代码 - 延迟执行以确保页面加载完成
-        setTimeout(addHDoujinDetailButton, 1000);
+        setTimeout(() => {
+            addHDoujinDetailButton();
+            observeHDoujinActionsContainer();
+        }, 1000);
     } else if (isHDoujinListPage()) {
         // HDoujin 列表页代码 - 延迟执行以确保页面加载完成
         setTimeout(addHDoujinListButtons, 1000);
     } else {
+        if (nhentaiInfoObserver) {
+            nhentaiInfoObserver.disconnect();
+            nhentaiInfoObserver = null;
+        }
         const gd5Element = document.querySelector('#gmid #gd5');
         if (gd5Element) {
             // E-Hentai/ExHentai 详情页代码
