@@ -952,38 +952,44 @@
         try {
             let hasChanges = false;
 
-            // 读取localStorage中的clearance信息
+            // 读取最新的凭据信息
             const clearance = localStorage.getItem('clearance');
-            const currentClearance = getSetting('hdoujin_clearance', '');
-            if (clearance && clearance !== currentClearance) {
-                // 存储clearance token
-                setSetting('hdoujin_clearance', clearance);
-                hasChanges = true;
-            }
+            let refreshToken = null;
+            let sessionToken = null;
 
-            // 读取localStorage中的token信息
             const tokenData = localStorage.getItem('token');
             if (tokenData) {
                 try {
                     const token = JSON.parse(tokenData);
-                    if (token && token.refresh) {
-                        const currentRefresh = getSetting('hdoujin_refresh_token', '');
-                        if (token.refresh !== currentRefresh) {
-                            // 存储refresh token
-                            setSetting('hdoujin_refresh_token', token.refresh);
-                            hasChanges = true;
-                        }
+                    if (token) {
+                        refreshToken = token.refresh || null;
+                        sessionToken = token.session || token.access || null;
                     }
                 } catch (e) {
                     // 解析失败，静默处理
                 }
             }
 
-            // 获取当前的 User-Agent
             const userAgent = navigator.userAgent;
+
+            // 与本地缓存比对
+            const currentClearance = getSetting('hdoujin_clearance', '');
+            if (clearance && clearance !== currentClearance) {
+                hasChanges = true;
+            }
+
+            const currentRefresh = getSetting('hdoujin_refresh_token', '');
+            if (refreshToken && refreshToken !== currentRefresh) {
+                hasChanges = true;
+            }
+
+            const currentSession = getSetting('hdoujin_session_token', '');
+            if (sessionToken && sessionToken !== currentSession) {
+                hasChanges = true;
+            }
+
             const currentUserAgent = getSetting('hdoujin_user_agent', '');
             if (userAgent && userAgent !== currentUserAgent) {
-                setSetting('hdoujin_user_agent', userAgent);
                 hasChanges = true;
             }
 
@@ -997,7 +1003,8 @@
                     },
                     data: JSON.stringify({
                         clearance: clearance,
-                        refresh_token: tokenData ? JSON.parse(tokenData).refresh : null,
+                        refresh_token: refreshToken,
+                        session_token: sessionToken,
                         user_agent: userAgent
                     }),
                     onload: function (response) {
@@ -1005,13 +1012,18 @@
                             const data = JSON.parse(response.responseText);
                             if (data && data.success) {
                                 console.log('成功更新 HDoujin tokens');
+                                // 只有后端成功接收，才更新本地缓存
+                                if (clearance) setSetting('hdoujin_clearance', clearance);
+                                if (refreshToken) setSetting('hdoujin_refresh_token', refreshToken);
+                                if (sessionToken) setSetting('hdoujin_session_token', sessionToken);
+                                if (userAgent) setSetting('hdoujin_user_agent', userAgent);
                             }
                         } catch (e) {
                             // 静默处理
                         }
                     },
                     onerror: function (err) {
-                        // 静默处理
+                        // 网络或服务器异常，不更新本地缓存留待下次重试
                     }
                 });
             }

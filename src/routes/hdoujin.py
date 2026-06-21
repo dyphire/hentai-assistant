@@ -27,10 +27,11 @@ def refresh_hdoujin_token():
 
         clearance = data.get('clearance')
         refresh_token = data.get('refresh_token')
+        session_token = data.get('session_token')
         user_agent = data.get('user_agent')
 
-        if not clearance and not refresh_token and not user_agent:
-            return json_response({'error': 'No clearance, refresh_token or user_agent provided'}), 400
+        if not clearance and not refresh_token and not session_token and not user_agent:
+            return json_response({'error': 'No tokens or user_agent provided'}), 400
 
         # 更新配置
         config_data = load_config()
@@ -43,6 +44,10 @@ def refresh_hdoujin_token():
 
         if refresh_token and refresh_token != hdoujin_config.get('refresh_token'):
             hdoujin_config['refresh_token'] = refresh_token
+            updated = True
+
+        if session_token and session_token != hdoujin_config.get('session_token'):
+            hdoujin_config['session_token'] = session_token
             updated = True
 
         if user_agent and user_agent != hdoujin_config.get('user_agent'):
