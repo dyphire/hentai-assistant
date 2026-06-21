@@ -638,15 +638,32 @@ const confirmSingleMove = async () => {
   }
 };
 
+// 独立计算受搜索影响的可移动任务总数（不受当前视图影响，用于展示 Tab 数字）
+const searchedMovableTasksCount = computed(() => {
+  let list = movableTasksList.value;
+  if (searchQuery.value.trim()) {
+    const query = searchQuery.value.trim().toLowerCase();
+    list = list.filter(t => 
+      t.id?.toLowerCase().includes(query) ||
+      t.url?.toLowerCase().includes(query) ||
+      t.filename?.toLowerCase().includes(query) || 
+      t.current_path?.toLowerCase().includes(query)
+    );
+  }
+  return list.length;
+});
+
 // 联动过滤后的可移动任务
 const filteredMovableTasks = computed(() => {
-  if (currentFilter.value !== 'all' && currentFilter.value !== 'completed') {
+  if (currentFilter.value !== 'all' && currentFilter.value !== 'completed' && currentFilter.value !== 'movable') {
     return [];
   }
   let list = movableTasksList.value;
   if (searchQuery.value.trim()) {
     const query = searchQuery.value.trim().toLowerCase();
     list = list.filter(t => 
+      t.id?.toLowerCase().includes(query) ||
+      t.url?.toLowerCase().includes(query) ||
       t.filename?.toLowerCase().includes(query) || 
       t.current_path?.toLowerCase().includes(query)
     );
@@ -739,8 +756,8 @@ const statusFilters = [
   { key: 'all', label: '全部任务' },
   { key: 'in-progress', label: '进行中' },
   { key: 'completed', label: '已完成' },
-  { key: 'cancelled', label: '取消' },
-  { key: 'failed', label: '失败' }
+  { key: 'movable', label: '可迁移' },
+  { key: 'failed,cancelled', label: '已停止' }
 ];
 
 // 分页后的任务列表（不再前端过滤，直接返回后端分页后的结果）
@@ -1526,8 +1543,21 @@ const getVisiblePages = (): (number | { type: 'ellipsis' })[] => {
 
 // 获取任务数量（从后端返回的统计信息中获取）
 const getTaskCount = (filter: string): number => {
+  if (filter === 'movable') {
+    return searchedMovableTasksCount.value;
+  }
   // 使用后端返回的准确统计信息
   const statusCounts = pagination.value.status_counts;
+  
+  if (filter === 'failed,cancelled' || filter === 'cancelled,failed') {
+    let count = 0;
+    if (statusCounts) {
+      if (statusCounts['cancelled'] !== undefined) count += statusCounts['cancelled'];
+      if (statusCounts['failed'] !== undefined) count += statusCounts['failed'];
+    }
+    return count;
+  }
+
   if (statusCounts && statusCounts[filter as keyof typeof statusCounts] !== undefined) {
     return statusCounts[filter as keyof typeof statusCounts];
   }
@@ -1547,6 +1577,9 @@ const getTaskCount = (filter: string): number => {
         return task.status === '取消';
       case 'failed':
         return task.status === '错误';
+      case 'failed,cancelled':
+      case 'cancelled,failed':
+        return task.status === '取消' || task.status === '错误';
       default:
         return false;
     }
@@ -1561,10 +1594,11 @@ const getEmptyMessage = (): string => {
       return '暂无进行中的下载任务。';
     case 'completed':
       return '暂无已完成的下载任务。';
-    case 'cancelled':
-      return '暂无取消的下载任务。';
-    case 'failed':
-      return '暂无失败的下载任务。';
+    case 'movable':
+      return '暂无可迁移的下载任务。';
+    case 'failed,cancelled':
+    case 'cancelled,failed':
+      return '暂无已停止的下载任务。';
     default:
       return '暂无下载任务。';
   }

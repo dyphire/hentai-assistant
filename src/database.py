@@ -421,9 +421,15 @@ class TaskDatabase:
                     params = []
 
                     if status_filter:
-                        status_cn = self.STATUS_MAP.get(status_filter, status_filter)
-                        where_clauses.append("status = ?")
-                        params.append(status_cn)
+                        status_filters = status_filter.split(',')
+                        status_cns = [self.STATUS_MAP.get(sf, sf) for sf in status_filters]
+                        if len(status_cns) == 1:
+                            where_clauses.append("status = ?")
+                            params.append(status_cns[0])
+                        else:
+                            placeholders = ','.join('?' for _ in status_cns)
+                            where_clauses.append(f"status IN ({placeholders})")
+                            params.extend(status_cns)
                         
                     if search_query:
                         import re

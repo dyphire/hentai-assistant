@@ -697,7 +697,19 @@ def get_tasks():
         order_by_sql = f"{sort_by} DESC"
 
         # 从数据库获取任务列表
-        db_tasks, total = task_db.get_tasks(status_filter, search_query if search_query else None, page, page_size, order_by=order_by_sql)
+        if status_filter == 'movable':
+            all_completed, _ = task_db.get_tasks(TaskStatus.COMPLETED, search_query if search_query else None, 1, 99999, order_by=order_by_sql)
+            movable_tasks = []
+            for db_task in all_completed:
+                enriched = enrich_task_data(db_task, current_app)
+                if enriched.get('has_path_difference'):
+                    movable_tasks.append(db_task)
+            total = len(movable_tasks)
+            start_idx = (page - 1) * page_size
+            end_idx = start_idx + page_size
+            db_tasks = movable_tasks[start_idx:end_idx]
+        else:
+            db_tasks, total = task_db.get_tasks(status_filter, search_query if search_query else None, page, page_size, order_by=order_by_sql)
 
         # 合并内存中的活跃任务信息
         with tasks_lock:
@@ -819,9 +831,9 @@ def get_movable_tasks():
         for db_task in db_tasks:
             enriched = enrich_task_data(db_task, current_app)
             if enriched.get('has_path_difference'):
-                # 提取精简所需的信息
                 movable_tasks.append({
                     'id': enriched['id'],
+                    'url': enriched.get('url'),
                     'filename': enriched.get('filename', '未知文件名'),
                     'current_path': enriched.get('output_path'),
                     'target_path': enriched.get('target_path'),
