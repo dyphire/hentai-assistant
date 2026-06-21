@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Hentai Assistant
 // @namespace    http://tampermonkey.net/
-// @version      2.1
+// @version      2.2
 // @description  Add a "Hentai Assistant" button on e-hentai.org, exhentai.org and nhentai.net, with menu
 // @author       rosystain
 // @match        https://e-hentai.org/*
@@ -176,78 +176,78 @@
         return container;
     }
 
-        // 发送下载任务函数
-        function sendDownload(url, mode) {
-            if (!SERVER_URL) {
-                showToast('请先设置服务器地址', 'error');
-                return;
-            }
-
-            let apiUrl = `${SERVER_URL}/api/download?url=${encodeURIComponent(url)}&mode=${mode}`;
-
-            if (IS_NHENTAI) {
-                // 为nhentai添加特殊处理参数
-                apiUrl += '&source=nhentai';
-
-                // 如果是详情页，尝试获取画廊ID
-                if (isNHentaiDetailPage()) {
-                    const galleryInfo = getNHentaiGalleryInfo();
-                    if (galleryInfo) {
-                        apiUrl += `&gallery_id=${galleryInfo.id}&title=${encodeURIComponent(galleryInfo.title)}`;
-                    }
-                }
-            } else if (IS_HDOUJIN) {
-                // 为hdoujin添加特殊处理参数
-                apiUrl += '&source=hdoujin';
-
-                // 如果是详情页，尝试获取画廊ID
-                if (isHDoujinDetailPage()) {
-                    const galleryInfo = getHDoujinGalleryInfo();
-                    if (galleryInfo) {
-                        apiUrl += `&gallery_id=${galleryInfo.id}&title=${encodeURIComponent(galleryInfo.title)}`;
-                    }
-                }
-            }
-
-            GM_xmlhttpRequest({
-                method: 'GET',
-                url: apiUrl,
-                onload: function (response) {
-                    try {
-                        const data = JSON.parse(response.responseText);
-                        if (data && data.task_id) {
-                            const taskId = data.task_id;
-                            const siteName = IS_NHENTAI ? 'NHentai' : (IS_HDOUJIN ? 'HDoujin' : (IS_EX ? 'ExHentai' : 'E-Hentai'));
-                            showToast(`已推送 ${siteName} 下载任务（mode=${mode}），task_id=${taskId}`, 'success');
-
-                            // 添加到活跃任务并开始轮询进度
-                            activeTasks[taskId] = {
-                                status: '进行中',
-                                progress: 0,
-                                downloaded: 0,
-                                total_size: 0,
-                                speed: 0,
-                                filename: null,
-                                lastUpdate: Date.now()
-                            };
-
-                            // 保存到localStorage
-                            saveTasksToStorage();
-
-                            updateProgressPanel();
-                            pollAllTasks(); // 使用批量查询
-                        } else {
-                            showToast('推送失败：返回数据异常', 'error');
-                        }
-                    } catch (err) {
-                        showToast('推送失败：返回数据非 JSON', 'error');
-                    }
-                },
-                onerror: function (err) {
-                    showToast('推送失败：请求出错，服务器连接失败', 'error');
-                }
-            });
+    // 发送下载任务函数
+    function sendDownload(url, mode) {
+        if (!SERVER_URL) {
+            showToast('请先设置服务器地址', 'error');
+            return;
         }
+
+        let apiUrl = `${SERVER_URL}/api/download?url=${encodeURIComponent(url)}&mode=${mode}`;
+
+        if (IS_NHENTAI) {
+            // 为nhentai添加特殊处理参数
+            apiUrl += '&source=nhentai';
+
+            // 如果是详情页，尝试获取画廊ID
+            if (isNHentaiDetailPage()) {
+                const galleryInfo = getNHentaiGalleryInfo();
+                if (galleryInfo) {
+                    apiUrl += `&gallery_id=${galleryInfo.id}&title=${encodeURIComponent(galleryInfo.title)}`;
+                }
+            }
+        } else if (IS_HDOUJIN) {
+            // 为hdoujin添加特殊处理参数
+            apiUrl += '&source=hdoujin';
+
+            // 如果是详情页，尝试获取画廊ID
+            if (isHDoujinDetailPage()) {
+                const galleryInfo = getHDoujinGalleryInfo();
+                if (galleryInfo) {
+                    apiUrl += `&gallery_id=${galleryInfo.id}&title=${encodeURIComponent(galleryInfo.title)}`;
+                }
+            }
+        }
+
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: apiUrl,
+            onload: function (response) {
+                try {
+                    const data = JSON.parse(response.responseText);
+                    if (data && data.task_id) {
+                        const taskId = data.task_id;
+                        const siteName = IS_NHENTAI ? 'NHentai' : (IS_HDOUJIN ? 'HDoujin' : (IS_EX ? 'ExHentai' : 'E-Hentai'));
+                        showToast(`已推送 ${siteName} 下载任务（mode=${mode}），task_id=${taskId}`, 'success');
+
+                        // 添加到活跃任务并开始轮询进度
+                        activeTasks[taskId] = {
+                            status: '进行中',
+                            progress: 0,
+                            downloaded: 0,
+                            total_size: 0,
+                            speed: 0,
+                            filename: null,
+                            lastUpdate: Date.now()
+                        };
+
+                        // 保存到localStorage
+                        saveTasksToStorage();
+
+                        updateProgressPanel();
+                        pollAllTasks(); // 使用批量查询
+                    } else {
+                        showToast('推送失败：返回数据异常', 'error');
+                    }
+                } catch (err) {
+                    showToast('推送失败：返回数据非 JSON', 'error');
+                }
+            },
+            onerror: function (err) {
+                showToast('推送失败：请求出错，服务器连接失败', 'error');
+            }
+        });
+    }
 
     function showToast(message, type = 'info', duration = 3000) {
         const container = createToastContainer();
@@ -1046,7 +1046,7 @@
 
     // 检查是否为nhentai列表页
     function isNHentaiListPage() {
-        return IS_NHENTAI && (window.location.pathname === '/' 
+        return IS_NHENTAI && (window.location.pathname === '/'
             || window.location.pathname.startsWith('/search')
             || window.location.pathname.startsWith('/tag')
             || window.location.pathname.startsWith('/favorites'));
@@ -1059,7 +1059,7 @@
 
     // 检查是否为hdoujin列表页
     function isHDoujinListPage() {
-        return IS_HDOUJIN && (window.location.pathname === '/' 
+        return IS_HDOUJIN && (window.location.pathname === '/'
             || window.location.pathname.startsWith('/popular')
             || window.location.pathname.startsWith('/browse')
             || window.location.pathname.startsWith('/favorites'));
@@ -1497,4 +1497,4 @@
             });
         }
     }
-    })();
+})();
